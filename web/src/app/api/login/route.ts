@@ -35,8 +35,13 @@ export async function POST(request: NextRequest) {
   const response = NextResponse.json({ ok: true });
   response.cookies.set(SESSION_COOKIE, await issueSession(secret), {
     ...sessionCookieOptions,
-    // The cookie must be scoped to the app, not the whole shared domain.
-    path: `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/`,
+    // Scoped to the app, not the whole shared domain — but with NO trailing
+    // slash. "/vue-automation/" fails to match a request for
+    // "/vue-automation", and Next 308-redirects the slashed form to the bare
+    // one, so the cookie is dropped on the very next hop and the app loops
+    // back to login forever. Without the slash it matches both the bare path
+    // and everything under it.
+    path: process.env.NEXT_PUBLIC_BASE_PATH || "/",
   });
   return response;
 }
