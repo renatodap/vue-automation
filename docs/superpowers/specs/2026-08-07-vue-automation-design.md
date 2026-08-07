@@ -18,28 +18,33 @@ entity dashboard.
 
 | Piece | Model | Notes |
 |---|---|---|
-| Host | Intel MacBook (no built-in Ethernet) | Chosen over the Pi 5 by preference; see "Host choice" below |
-| Storage | NVMe in a USB→NVMe enclosure | HA OS runs from the external drive; the MacBook's internal disk is never touched |
-| Networking | USB Ethernet adapter — **must be purchased** | Mandatory, not optional. See "Networking" below |
+| Host | Raspberry Pi 5 | **Running.** HA OS, reachable at `10.0.0.67` / `homeassistant.local` |
+| Storage | NVMe via HAT | Boots from NVMe; leaves all USB ports free |
+| Networking | Onboard Wi-Fi (2.4 GHz) | Working, but see "Networking" below — this is the one thing worth changing later |
 | Zigbee coordinator | HAUTECH Zigbee 3.0 USB Dongle (Silicon Labs EFR32MG24) | Delivered 2026-08-05 |
 | Lights | 4× THIRDREALITY ZL1 A19 RGBCW | 800 lm, 2700–6500K, delivered 2026-08-04 |
 | Fixtures | 4 living room lamps | All existing, all E26 |
 
-Network is `10.0.0.0/24`, gateway `10.0.0.1`.
+Network is `10.0.0.0/24`, gateway `10.0.0.1`. HA serves on port 80, with 8123
+redirecting to it.
 
 ### Host choice
 
-A Raspberry Pi 5 with an NVMe HAT is on hand and is the technically better
-appliance — bare-metal HA OS, real USB ports, a few watts, no moving parts, no
-battery. The MacBook was chosen anyway. This section records the tradeoff so the
-decision isn't re-litigated later, and so the failure modes below are understood
-as accepted rather than overlooked.
+An old Intel MacBook was briefly considered as the host and the spec was
+rewritten around it, before the Pi was simply set up instead. The Pi is the right
+answer and this is recorded only so the MacBook idea doesn't get revived without
+its costs attached:
 
-**Running from external USB, not the internal SSD.** HA OS is written to the NVMe
-in its USB enclosure, and the MacBook boots from it by holding Option at startup.
-macOS stays intact on the internal disk. This is reversible — unplug the drive and
-the machine is a laptop again — and it reuses hardware already owned, since the
-NVMe is freed up by not using the Pi.
+- **Broadcom BCM43xx Wi-Fi has no driver in HA OS.** That model has no built-in
+  Ethernet either, so it would have had no network at all until a USB Ethernet
+  adapter (~$20, ASIX AX88179 or Realtek RTL8153 chipset) was purchased and
+  attached.
+- **Linux suspends on lid close**, and HA OS doesn't expose the `logind` setting
+  that changes it. A suspended host means dead lights.
+- **An old battery on permanent AC is a real fire risk** in a way a Pi never is.
+
+The MacBook remains a viable fallback if the Pi fails, and is a genuinely good
+candidate for a wall-mounted kiosk display later — see "Out of scope".
 
 ## Architecture
 
@@ -48,7 +53,7 @@ NVMe is freed up by not using the Pi.
    └─ Zigbee 3.0 mesh (bulbs are mains-powered, so they also route)
         └─ HAUTECH MG24 coordinator  [USB 2.0 port, on extension cable]
              └─ Zigbee2MQTT ──MQTT──> Mosquitto broker
-                                          └─ Home Assistant (HA OS, Intel MacBook)
+                                          └─ Home Assistant (HA OS, Raspberry Pi 5)
                                                ├─ scene entities (YAML, in this repo)
                                                └─ WebSocket API
                                                     └─ Next.js scene picker (LAN, served from the host)
@@ -57,58 +62,47 @@ NVMe is freed up by not using the Pi.
 Each layer is independently testable: the mesh works before MQTT exists, HA
 works before scenes exist, scenes work before the UI exists.
 
-## Networking — wired is mandatory
+## Networking — Wi-Fi works, wired is better
 
-On the Pi, Wi-Fi was a workable fallback. On an Intel MacBook it is not.
+The Pi is on its onboard 2.4 GHz Wi-Fi. That works, and nothing here is blocked
+on changing it.
 
-MacBooks use Broadcom BCM43xx wireless chips, which need proprietary firmware
-that HA OS does not ship. The realistic expectation is **no wireless interface at
-all** under HA OS. With no built-in Ethernet port on this model, that means the
-machine has no network whatsoever until an adapter is attached.
+The catch is that **2.4 GHz Wi-Fi and Zigbee share a band**, and the Pi's radio
+sits inches from where the coordinator plugs in. This is the standard cause of
+short Zigbee range and bulbs that drop off the mesh. Two mitigations, in order of
+effort:
 
-**Buy a USB Ethernet adapter with an ASIX AX88179 or Realtek RTL8153 chipset.**
-Both have in-tree Linux drivers and work without configuration. Cheap adapters
-with obscure chipsets are the ones that don't come up, and diagnosing that on a
-machine with no network is unpleasant. Roughly $20.
+1. **Put the dongle on a USB extension cable** — already required for other
+   reasons, and buys the most improvement for the least effort.
+2. **Move the Pi to Ethernet and disable its Wi-Fi**, if dropouts show up later.
 
-A wired host is also the better outcome for Zigbee: no 2.4 GHz radio transmitting
-next to the coordinator, which is the same interference argument that applied to
-the Pi.
+Treat this as the first suspect if Zigbee misbehaves, rather than something to
+fix pre-emptively.
 
 ## Phase 0 — Bring-up
 
 Ordered, because several steps fail invisibly if done out of order.
 
-1. Write the **HA OS generic x86-64** image to the NVMe in its USB enclosure,
-   attached to the working Mac. Balena Etcher or `dd`; Raspberry Pi Imager is not
-   needed on this path.
-2. Attach the USB Ethernet adapter to the MacBook and plug it into the network.
-   Do this before first boot so HA OS sees a link immediately.
-3. Boot the MacBook holding **Option**, and select the external drive (it appears
-   as "EFI Boot"). macOS on the internal disk is untouched and remains selectable.
-4. HA OS should acquire a DHCP lease automatically. Find it at
-   `http://homeassistant.local:8123`, or by checking the router's client list for
-   a new device. `ha network info` at the console reports the IP directly.
-5. Complete HA onboarding.
-6. Install the **Mosquitto broker** add-on, then the **Zigbee2MQTT** add-on.
-7. **Only now** plug in the MG24 — via a short USB extension cable, never seated
-   directly against the chassis. Verify the coordinator firmware in Z2M before
-   pairing; MG24 sticks ship with varying coordinator firmware and may need
-   flashing.
-8. Pair the four bulbs, name them by physical position, not by "Lamp 1–4".
-
-### Laptop-specific setup
-
-- **Leave the lid open.** Linux suspends on lid close by default, and a suspended
-  host takes the lights down with it. HA OS does not expose the `logind` settings
-  that normally fix this; changing it requires developer-mode shell access, which
-  is off the supported path. An open lid is the reliable answer.
-- **Keep it on AC permanently, and check the battery first.** A swollen battery in
-  a machine that is always charging is the one genuine safety risk in this plan.
-  If there is any bulge in the case or trackpad, remove the battery before
-  putting the machine into service.
-- **Set it somewhere ventilated.** An old laptop running continuously with the lid
-  open needs airflow more than a Pi does.
+- [x] HA OS installed on the Pi 5 and booted from NVMe.
+- [x] On the network at `10.0.0.67`, resolving as `homeassistant.local`.
+- [ ] **Complete HA onboarding.** Account is local-only with no recovery path —
+      store the password in a password manager immediately. Set location,
+      elevation, timezone, and units correctly; sun-based automations depend on
+      the coordinates. Skip the device auto-discovery offer and add things
+      deliberately.
+- [ ] Install the **Mosquitto broker** add-on. Start it, and enable both "start
+      on boot" and "watchdog".
+- [ ] Install the **Zigbee2MQTT** add-on, but don't start it yet.
+- [ ] **Now plug in the MG24** — into a **black USB 2.0 port**, via a short USB
+      extension cable, never seated directly against the board. The blue USB 3
+      ports are the worst possible choice; USB 3 emits directly into the Zigbee
+      band.
+- [ ] Point Z2M at the coordinator's serial path, start it, and read the log
+      before pairing anything. Verify the coordinator firmware — MG24 sticks ship
+      with varying firmware and may need flashing.
+- [ ] Pair the four bulbs, naming each by physical position rather than "Lamp 1–4".
+- [ ] **Configure HA backups before building anything on top.** Losing the NVMe
+      otherwise loses the whole setup.
 
 ## Zigbee stack: Zigbee2MQTT
 
@@ -184,12 +178,9 @@ Kept out to stay shippable; each is additive later.
 
 | Risk | Mitigation |
 |---|---|
-| No network at all (Broadcom Wi-Fi unsupported, no built-in port) | USB Ethernet adapter with a known-good chipset, attached before first boot. This is the most likely thing to block Phase 0 |
-| Mac won't boot the external drive | Hold Option at startup and select "EFI Boot". Intel Macs boot UEFI external media reliably; if it doesn't appear, the image was written to a partition rather than the whole device |
-| Laptop suspends and takes the lights down | Lid stays open; verify it survives an hour idle before trusting it |
-| Swollen battery on permanent AC | Inspect before service; remove the battery if there's any bulge |
+| Zigbee range or dropouts | **Most likely problem, given the Pi is on 2.4 GHz Wi-Fi.** Dongle on an extension cable in a USB 2.0 port; move the Pi to Ethernet and disable Wi-Fi if it persists |
 | MG24 firmware incompatible with Z2M | Check firmware before pairing; reflashing is documented but tedious |
-| Zigbee range or dropouts | Dongle on an extension cable, never seated against the chassis; wired host keeps a 2.4 GHz radio away from the coordinator |
 | Someone switches a lamp off physically | Scenes degrade gracefully and report it; Zigbee buttons if it becomes routine |
-| Drive loss takes HA with it | Configure HA backups before building anything on top |
-| MacBook proves unreliable as a host | The Pi 5 and its HAT remain on hand as a drop-in fallback — the NVMe moves over and nothing above the OS layer changes |
+| NVMe loss takes HA with it | Configure HA backups before building anything on top |
+| HA onboarding password lost | Local account with no recovery path — into a password manager at creation time |
+| Pi proves unreliable as a host | The Intel MacBook remains a fallback, at the cost of a USB Ethernet adapter and the lid-sleep and battery problems documented above |
