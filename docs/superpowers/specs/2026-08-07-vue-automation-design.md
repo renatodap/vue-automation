@@ -56,11 +56,38 @@ candidate for a wall-mounted kiosk display later — see "Out of scope".
                                           └─ Home Assistant (HA OS, Raspberry Pi 5)
                                                ├─ scene entities (YAML, in this repo)
                                                └─ WebSocket API
-                                                    └─ Next.js scene picker (LAN, served from the host)
+                                               └─ REST API  ← ── ── ── ┐
+                                                                       │
+                                                            Tailscale (WireGuard)
+                                                                       │
+   Phone ──HTTPS──> renatodap.me/vue-automation ──> Next.js on Persimmon (Hetzner)
 ```
 
 Each layer is independently testable: the mesh works before MQTT exists, HA
 works before scenes exist, scenes work before the UI exists.
+
+### Why Tailscale, and why the browser never talks to HA
+
+The PWA is hosted on the Persimmon box in Falkenstein. Home Assistant is at
+`10.0.0.67` on a home LAN in Indianapolis. Two independent walls sit between
+them, and only one solution clears both:
+
+1. **A private address is not routable from the internet.** A server in Germany
+   has no path to `10.0.0.*`.
+2. **An HTTPS page cannot call a plaintext LAN address.** Even standing in the
+   apartment, the browser blocks it as mixed content. "Just have the phone talk
+   to the Pi directly" fails on this, not on routing.
+
+So the Pi and the Persimmon server join one tailnet, and **every Home Assistant
+call is made server-side**. This is not only a workaround — it's the better
+design regardless:
+
+- The HA token never reaches the browser. It grants full control of the house;
+  shipping it to the client would hand anyone with devtools the same power.
+- Nothing about Home Assistant is exposed publicly. The only public surface is
+  this app, behind its own passphrase.
+- The app works identically on cellular, on hotel wifi, and on the couch,
+  because the phone's network is irrelevant to it.
 
 ## Networking — Wi-Fi works, wired is better
 
@@ -138,13 +165,23 @@ A Next.js scene picker — named moods as large tappable cards. No entity lists,
 per-bulb sliders, no settings. HA's own companion app stays installed underneath
 for real controls and debugging, which is what keeps the custom surface small.
 
-- **Served from the HA host, on the LAN.** Lights keep working when the internet is
-  down, there's no tunnel to maintain, and nothing is exposed publicly.
-- **Talks to HA over the WebSocket API** with a long-lived access token.
-  Subscribes to `state_changed` for live state; sends `scene.turn_on` and
-  `light.turn_on` to act.
-- **Remote access is deferred.** Tailscale adds it later without changing this
-  design.
+- **Next.js 16 / React 19 / Tailwind v4**, deployed to Persimmon under
+  `renatodap.me/vue-automation`, path-mounted like the rest of the fleet.
+- **Server-side HA REST client** with a long-lived access token, over the
+  tailnet. The client polls `/api/state` — one round trip returning scenes,
+  lamps and health together — and only while the tab is visible.
+- **Dark by default.** The app's job is dimming lights in a dark room; a cream
+  screen at 9pm undoes what the user just asked for. Light mode is opt-in.
+- **Shared passphrase**, exchanged for a signed cookie. One user, no accounts.
+  The middleware runs on every request with no `config.matcher`, because a
+  matcher can never match the exact basePath root — the hole that left another
+  app in this fleet serving its dashboard unauthenticated.
+
+**Tradeoff accepted:** hosting off-site means the lights stop responding *from
+this app* when the home internet drops, where a Pi-hosted UI would not. Home
+Assistant itself keeps running, and its own app on the local network still
+works. Cellular access every other day of the year is worth more than
+graceful degradation during an outage.
 
 ### Failure behavior
 

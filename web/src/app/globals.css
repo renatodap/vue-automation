@@ -1,0 +1,243 @@
+@import "tailwindcss";
+
+@custom-variant light (&:where(.light, .light *, [data-theme="light"], [data-theme="light"] *));
+
+/* ============================ TOKENS ============================
+   Dark by default, deliberately. This app's whole job is dimming lights in a
+   dark room; a cream screen at 9pm undoes the thing the user just asked for.
+   Light mode exists for daytime and is opt-in via [data-theme="light"].
+
+   The palette is warm throughout — the greys carry a yellow bias rather than
+   the usual blue one, so the UI reads as lamplight instead of as a terminal.
+================================================================= */
+:root {
+  color-scheme: dark;
+
+  --bg: #14120e;
+  --surface: #1d1a15;
+  --surface-sunken: #100e0b;
+  --elevated: #26221b;
+
+  --text-primary: #f5f1e8;
+  --text-secondary: #b6ae9e;
+  --text-muted: #8b8375;
+  --text-on-accent: #1a1508;
+
+  --border: #2c2721;
+  --border-strong: #3d372d;
+  --border-focus: #e8a54d;
+
+  /* Lamp-glow amber. Also the colour a 2700K bulb actually throws. */
+  --accent: #e8a54d;
+  --accent-hover: #f0b667;
+  --accent-active: #d0913c;
+  --accent-subtle: rgba(232, 165, 77, 0.14);
+  --accent-border: rgba(232, 165, 77, 0.32);
+
+  --positive: #6bbf8a;
+  --positive-bg: rgba(107, 191, 138, 0.14);
+  --negative: #e8746a;
+  --negative-bg: rgba(232, 116, 106, 0.14);
+  --warning: #e0a34a;
+  --warning-bg: rgba(224, 163, 74, 0.14);
+  --neutral-bg: #262119;
+  --neutral-fg: #b6ae9e;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
+  /* Warm bloom under an active scene card — the UI's one piece of theatre. */
+  --glow-accent: 0 0 0 1px var(--accent-border), 0 8px 32px rgba(232, 165, 77, 0.22);
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
+
+  --control-min: 44px;
+  --content-max: 620px;
+  --page-pad: clamp(16px, 4vw, 24px);
+
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.light,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f6f4ef;
+  --surface: #ffffff;
+  --surface-sunken: #efece4;
+  --elevated: #ffffff;
+
+  --text-primary: #1a1714;
+  --text-secondary: #57514a;
+  --text-muted: #7a7268;
+  --text-on-accent: #ffffff;
+
+  --border: #e5e0d6;
+  --border-strong: #d2ccbf;
+
+  --accent: #a86a12;
+  --accent-hover: #8d5709;
+  --accent-active: #74480a;
+  --accent-subtle: #f8efdf;
+  --accent-border: #e3cda4;
+
+  --positive: #1a7a4a;
+  --positive-bg: #e6f4ec;
+  --negative: #b93a2c;
+  --negative-bg: #fbeae8;
+  --warning: #8a5a00;
+  --warning-bg: #fbf0dc;
+  --neutral-bg: #eeeae1;
+  --neutral-fg: #57514a;
+
+  --shadow-sm: 0 1px 2px rgba(26, 23, 20, 0.07);
+  --shadow-md: 0 4px 14px rgba(26, 23, 20, 0.09);
+  --shadow-lg: 0 16px 40px rgba(26, 23, 20, 0.13);
+  --glow-accent: 0 0 0 1px var(--accent-border), 0 8px 28px rgba(168, 106, 18, 0.16);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-elevated: var(--elevated);
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+  --color-on-accent: var(--text-on-accent);
+  --color-accent: var(--accent);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-border: var(--accent-border);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+}
+
+/* ============================ RESET / BASE ============================ */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  /* Kills pull-to-refresh and the rubber-band. A shell that bounces reads as
+     a web page rather than an app. */
+  overscroll-behavior-y: none;
+  /* The shell owns scrolling. Two scrollers is what makes headers drift. */
+  overflow: hidden;
+}
+
+/* ============================ SHELL ============================
+   Three grid rows, one scroller. Never 100vh: it resolves against the LARGEST
+   viewport, so on load with toolbars visible the bottom row sits below the
+   fold. dvh tracks the visible area live.
+
+   The header and footer are grid ROWS, not position:fixed. Fixed elements
+   detach from the layout viewport and iOS moves them independently; a grid row
+   cannot move, because the grid IS the viewport.
+================================================================= */
+.app {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+
+.app > header {
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-inline: max(var(--page-pad), env(safe-area-inset-left));
+  padding-bottom: 12px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.app > main {
+  overflow-y: auto;
+  /* Stops scroll chaining from dragging the whole shell. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-inline: max(var(--page-pad), env(safe-area-inset-left));
+  padding-bottom: 16px;
+}
+
+.app > footer {
+  /* Without the max() fallback this is 0px on a device with no inset, and the
+     row sits flush against the screen edge. */
+  padding-bottom: max(14px, env(safe-area-inset-bottom));
+  padding-top: 10px;
+  padding-inline: max(var(--page-pad), env(safe-area-inset-left));
+  border-top: 1px solid var(--border);
+  background: var(--surface-sunken);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ============================ CONTROLS ============================ */
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  min-height: var(--control-min);
+  cursor: pointer;
+  border: none;
+  background: none;
+  /* Only safe to remove because every interactive element below defines a
+     real :active state. Removing the feedback with nothing behind it makes an
+     app feel broken. */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+input {
+  /* Under 16px iOS zooms on focus and never zooms back. This outranks the
+     type scale. */
+  font-size: 16px;
+  min-height: var(--control-min);
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

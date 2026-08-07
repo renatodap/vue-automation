@@ -1,0 +1,117 @@
+# Living room scenes — four ThirdReality ZL1 bulbs.
+#
+# REPLACE THE ENTITY IDs. These are placeholders; Zigbee2MQTT assigns real ones
+# from the names given at pairing time. Name by physical position when you pair
+# — light.floor_lamp, not light.lamp_1.
+#
+# Values below are a starting point, not a design. Light is judged in the room,
+# at night, with your own eyes; tune these on the couch and commit what you
+# land on. Every scene sets colour_temp_kelvin explicitly rather than leaving
+# it to whatever the bulb last did, so a scene always lands the same way.
+#
+# 2700K throughout. The ZL1 goes to 6500K, but cool white in a living room at
+# night reads as an office. Reserve the cool end for a "clean up" scene where
+# you actually want to see what you're doing.
+
+- id: vue_evening
+  name: Evening
+  icon: mdi:weather-sunset
+  entities:
+    light.floor_lamp:
+      state: on
+      brightness_pct: 40
+      color_temp_kelvin: 2700
+    light.corner_lamp:
+      state: on
+      brightness_pct: 35
+      color_temp_kelvin: 2700
+    light.table_lamp:
+      state: on
+      brightness_pct: 45
+      color_temp_kelvin: 2700
+    light.accent_lamp:
+      state: on
+      brightness_pct: 30
+      color_temp_kelvin: 2700
+
+- id: vue_cinema
+  name: Cinema
+  icon: mdi:movie-open
+  entities:
+    # Everything in the screen's sightline goes low; the far lamps stay barely
+    # on so the room doesn't read as a black void around a bright rectangle.
+    light.floor_lamp:
+      state: on
+      brightness_pct: 12
+      color_temp_kelvin: 2700
+    light.corner_lamp:
+      state: on
+      brightness_pct: 20
+      color_temp_kelvin: 2700
+    light.table_lamp:
+      state: off
+    light.accent_lamp:
+      state: on
+      brightness_pct: 15
+      color_temp_kelvin: 2700
+
+- id: vue_focus
+  name: Focus
+  icon: mdi:book-open-variant
+  entities:
+    # Reading light. Brighter and more even than Evening, still warm — the
+    # point is enough light to read by without lighting the whole room flat.
+    light.floor_lamp:
+      state: on
+      brightness_pct: 85
+      color_temp_kelvin: 3000
+    light.corner_lamp:
+      state: on
+      brightness_pct: 40
+      color_temp_kelvin: 2700
+    light.table_lamp:
+      state: on
+      brightness_pct: 70
+      color_temp_kelvin: 3000
+    light.accent_lamp:
+      state: off
+
+- id: vue_host
+  name: Host
+  icon: mdi:glass-wine
+  entities:
+    # Speech-friendly: bright enough to read faces, nothing above ~65% so it
+    # never feels like overhead lighting.
+    light.floor_lamp:
+      state: on
+      brightness_pct: 55
+      color_temp_kelvin: 2700
+    light.corner_lamp:
+      state: on
+      brightness_pct: 60
+      color_temp_kelvin: 2700
+    light.table_lamp:
+      state: on
+      brightness_pct: 65
+      color_temp_kelvin: 2700
+    light.accent_lamp:
+      state: on
+      brightness_pct: 50
+      color_temp_kelvin: 2700
+
+- id: vue_late
+  name: Late
+  icon: mdi:weather-night
+  entities:
+    # One lamp, very low, warm as the bulb goes. For crossing the room at 2am
+    # without waking yourself up.
+    light.floor_lamp:
+      state: on
+      brightness_pct: 5
+      color_temp_kelvin: 2200
+    light.corner_lamp:
+      state: off
+    light.table_lamp:
+      state: off
+    light.accent_lamp:
+      state: off
