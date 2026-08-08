@@ -233,6 +233,46 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* Colour-temperature slider: the track carries the actual gradient it selects,
+   so the control reads as warm→cool before you look at the number. Needs the
+   vendor-specific track pseudo-elements — there is no cross-browser shorthand. */
+.temp-range {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.temp-range::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: var(--r-pill);
+  background-image: var(--track-image);
+  border: 1px solid var(--border-strong);
+}
+.temp-range::-moz-range-track {
+  height: 10px;
+  border-radius: var(--r-pill);
+  background-image: var(--track-image);
+  border: 1px solid var(--border-strong);
+}
+.temp-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -7px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 2px solid var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+.temp-range::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 2px solid var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

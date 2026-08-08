@@ -107,6 +107,9 @@ export type Lamp = {
   brightness: number | null;
   /** Mired-derived Kelvin, null when the bulb is in colour mode or off. */
   kelvin: number | null;
+  /** The bulb's own reported tunable range — never hardcode 2700–6500. */
+  minKelvin: number;
+  maxKelvin: number;
   rgb: [number, number, number] | null;
 };
 
@@ -136,6 +139,9 @@ export function toLamps(states: HaState[]): Lamp[] {
       const kelvinRaw = s.attributes["color_temp_kelvin"];
       const rgbRaw = s.attributes["rgb_color"];
 
+      const minK = s.attributes["min_color_temp_kelvin"];
+      const maxK = s.attributes["max_color_temp_kelvin"];
+
       return {
         entityId: s.entity_id,
         name: friendlyName(s, s.entity_id.replace(/^light\./, "")),
@@ -143,6 +149,9 @@ export function toLamps(states: HaState[]): Lamp[] {
         on: s.state === "on",
         brightness: s.state === "on" ? brightness : null,
         kelvin: typeof kelvinRaw === "number" ? kelvinRaw : null,
+        // Fall back to the ZL1's range only if the bulb doesn't report its own.
+        minKelvin: typeof minK === "number" ? minK : 2000,
+        maxKelvin: typeof maxK === "number" ? maxK : 6500,
         rgb: Array.isArray(rgbRaw) && rgbRaw.length === 3
           ? (rgbRaw as [number, number, number])
           : null,

@@ -16,6 +16,8 @@ export type LampView = {
   on: boolean;
   brightness: number | null;
   kelvin: number | null;
+  minKelvin: number;
+  maxKelvin: number;
   rgb: [number, number, number] | null;
 };
 

@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Lightbulb, LightbulbOff, Power, RefreshCw, WifiOff } from "lucide-react";
+import {
+  ChevronDown,
+  Lightbulb,
+  LightbulbOff,
+  Power,
+  RefreshCw,
+  WifiOff,
+} from "lucide-react";
 import { apiUrl, postJson } from "@/lib/client";
 import type { LampView, SceneView, StateResponse } from "@/lib/types";
 
@@ -13,6 +20,7 @@ export function ScenePicker() {
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showLamps, setShowLamps] = useState(false);
+  const [openLamp, setOpenLamp] = useState<string | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -113,7 +121,10 @@ export function ScenePicker() {
   }, [state, flash, load]);
 
   const setLamp = useCallback(
-    async (lamp: LampView, patch: { on?: boolean; brightness?: number }) => {
+    async (
+      lamp: LampView,
+      patch: { on?: boolean; brightness?: number; kelvin?: number },
+    ) => {
       setPending(lamp.entityId);
       try {
         await postJson("/api/light", { entityId: lamp.entityId, ...patch });
@@ -195,8 +206,13 @@ export function ScenePicker() {
                     key={lamp.entityId}
                     lamp={lamp}
                     busy={pending === lamp.entityId}
+                    open={openLamp === lamp.entityId}
+                    onOpen={() =>
+                      setOpenLamp((c) => (c === lamp.entityId ? null : lamp.entityId))
+                    }
                     onToggle={() => void setLamp(lamp, { on: !lamp.on })}
                     onBrightness={(v) => void setLamp(lamp, { brightness: v })}
+                    onKelvin={(v) => void setLamp(lamp, { kelvin: v })}
                   />
                 ))}
               </div>
@@ -278,66 +294,180 @@ function SceneCard({
 function LampRow({
   lamp,
   busy,
+  open,
+  onOpen,
   onToggle,
   onBrightness,
+  onKelvin,
 }: {
   lamp: LampView;
   busy: boolean;
+  open: boolean;
+  onOpen: () => void;
   onToggle: () => void;
   onBrightness: (value: number) => void;
+  onKelvin: (value: number) => void;
 }) {
+  const canAdjust = lamp.reachable && lamp.on;
+
   return (
     <div
-      className="flex items-center gap-3 p-3 rounded-[var(--r-md)]"
+      className="rounded-[var(--r-md)] overflow-hidden"
       style={{
         background: "var(--surface)",
         border: "1px solid var(--border)",
         opacity: lamp.reachable ? 1 : 0.5,
       }}
     >
-      <button
-        onClick={onToggle}
-        disabled={!lamp.reachable || busy}
-        aria-label={lamp.on ? `Turn off ${lamp.name}` : `Turn on ${lamp.name}`}
-        className="shrink-0 active:scale-90 transition-transform"
-        style={{
-          minWidth: 44,
-          color: lamp.on ? "var(--accent)" : "var(--text-muted)",
-        }}
-      >
-        {lamp.reachable ? (
-          lamp.on ? <Lightbulb size={20} /> : <LightbulbOff size={20} />
-        ) : (
-          <WifiOff size={20} />
-        )}
-      </button>
+      <div className="flex items-center gap-3 p-3">
+        <button
+          onClick={onToggle}
+          disabled={!lamp.reachable || busy}
+          aria-label={lamp.on ? `Turn off ${lamp.name}` : `Turn on ${lamp.name}`}
+          className="shrink-0 active:scale-90 transition-transform"
+          style={{
+            minWidth: 44,
+            color: lamp.on ? "var(--accent)" : "var(--text-muted)",
+          }}
+        >
+          {lamp.reachable ? (
+            lamp.on ? <Lightbulb size={20} /> : <LightbulbOff size={20} />
+          ) : (
+            <WifiOff size={20} />
+          )}
+        </button>
 
-      <div className="min-w-0 flex-1">
-        {/* Never truncate a device name — wrap instead. */}
-        <div className="text-[14px] leading-tight break-words">{lamp.name}</div>
-        <div className="text-[12px] text-[var(--text-muted)]">
-          {!lamp.reachable
-            ? "Unreachable — switch may be off"
-            : lamp.on
-              ? `${lamp.brightness ?? 100}%${lamp.kelvin ? ` · ${lamp.kelvin}K` : ""}`
-              : "Off"}
-        </div>
+        <button
+          onClick={onOpen}
+          disabled={!canAdjust}
+          className="min-w-0 flex-1 text-left disabled:cursor-default"
+          aria-expanded={open}
+        >
+          {/* Never truncate a device name — wrap instead. */}
+          <div className="text-[14px] leading-tight break-words">{lamp.name}</div>
+          <div className="text-[12px] text-[var(--text-muted)]">
+            {!lamp.reachable
+              ? "Unreachable — switch may be off"
+              : lamp.on
+                ? `${lamp.brightness ?? 100}% · ${lamp.kelvin ? `${lamp.kelvin}K` : "colour"}`
+                : "Off"}
+          </div>
+        </button>
+
+        {canAdjust && (
+          <ChevronDown
+            size={16}
+            className="shrink-0 text-[var(--text-muted)] transition-transform"
+            style={{ transform: open ? "rotate(180deg)" : "none" }}
+          />
+        )}
       </div>
 
-      {lamp.reachable && lamp.on && (
-        <input
-          type="range"
-          min={1}
-          max={100}
-          defaultValue={lamp.brightness ?? 100}
-          onPointerUp={(e) => onBrightness(Number(e.currentTarget.value))}
-          onKeyUp={(e) => onBrightness(Number(e.currentTarget.value))}
-          aria-label={`${lamp.name} brightness`}
-          className="w-[92px] shrink-0"
-          style={{ accentColor: "var(--accent)", minHeight: 44, padding: 0 }}
-        />
+      {open && canAdjust && (
+        <div className="px-3 pb-3.5 pt-1 flex flex-col gap-3.5">
+          <Slider
+            label="Intensity"
+            value={lamp.brightness ?? 100}
+            min={1}
+            max={100}
+            suffix="%"
+            onCommit={onBrightness}
+            ariaLabel={`${lamp.name} brightness`}
+          />
+          <Slider
+            label="Temperature"
+            value={lamp.kelvin ?? 2700}
+            min={lamp.minKelvin}
+            max={lamp.maxKelvin}
+            suffix="K"
+            step={50}
+            // The track is the scale: warm on the left, cool on the right, so
+            // the control looks like what it does before you read the number.
+            trackImage="linear-gradient(90deg,#ff9329 0%,#ffb765 18%,#ffd6aa 38%,#fff4e8 55%,#f2f4ff 74%,#cfdcff 100%)"
+            onCommit={onKelvin}
+            ariaLabel={`${lamp.name} colour temperature`}
+          />
+        </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Commit on release, not on every input event.
+ *
+ * A slider fires continuously while dragging; forwarding each frame to Zigbee
+ * floods a mesh that manages a few messages a second, and the lamp ends up
+ * chasing a queue of stale values seconds after your thumb stopped.
+ */
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  suffix,
+  trackImage,
+  onCommit,
+  ariaLabel,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  suffix: string;
+  trackImage?: string;
+  onCommit: (value: number) => void;
+  ariaLabel: string;
+}) {
+  const [local, setLocal] = useState(value);
+
+  // Follow the lamp when it changes underneath us (a scene fired, another
+  // device moved it) — but never while the user is mid-drag.
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!dragging) setLocal(value);
+  }, [value, dragging]);
+
+  return (
+    <label className="block">
+      <span className="flex items-baseline justify-between mb-1.5">
+        <span className="text-[12px] text-[var(--text-secondary)]">{label}</span>
+        <span className="text-[12px] tabular-nums text-[var(--text-muted)]">
+          {Math.round(local)}
+          {suffix}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={local}
+        aria-label={ariaLabel}
+        onChange={(e) => {
+          setDragging(true);
+          setLocal(Number(e.currentTarget.value));
+        }}
+        onPointerUp={(e) => {
+          setDragging(false);
+          onCommit(Number(e.currentTarget.value));
+        }}
+        onKeyUp={(e) => {
+          setDragging(false);
+          onCommit(Number(e.currentTarget.value));
+        }}
+        className={trackImage ? "temp-range" : ""}
+        style={{
+          width: "100%",
+          minHeight: 44,
+          padding: 0,
+          accentColor: "var(--accent)",
+          ...(trackImage ? { ["--track-image" as string]: trackImage } : {}),
+        }}
+      />
+    </label>
   );
 }
 
