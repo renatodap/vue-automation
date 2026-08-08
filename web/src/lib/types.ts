@@ -25,11 +25,19 @@ export type LampView = {
   colorMode: string | null;
 };
 
+export type AutomationView = {
+  entityId: string;
+  name: string;
+  id: string | null;
+  enabled: boolean;
+};
+
 export type StateResponse =
   | {
       ok: true;
       scenes: SceneView[];
       lamps: LampView[];
+      automations: AutomationView[];
       unreachableCount: number;
     }
   | {

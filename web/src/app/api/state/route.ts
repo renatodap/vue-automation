@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { HaAuthError, HaUnreachableError, getStates, toLamps, toScenes } from "@/lib/ha";
+import {
+  HaAuthError,
+  HaUnreachableError,
+  getStates,
+  toAutomations,
+  toLamps,
+  toScenes,
+} from "@/lib/ha";
 import { loadSceneMeta } from "@/lib/db";
 import { ConfigError } from "@/lib/env";
 
@@ -47,6 +54,7 @@ export async function GET() {
       ok: true,
       scenes,
       lamps,
+      automations: toAutomations(states),
       unreachableCount: lamps.filter((l) => !l.reachable).length,
     });
   } catch (error) {

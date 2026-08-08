@@ -139,6 +139,46 @@ export function snapshotForScene(lamps: Lamp[]): Record<string, Record<string, u
   return entities;
 }
 
+// ---------------------------------------------------------------- automations
+
+export type Automation = {
+  entityId: string;
+  name: string;
+  id: string | null;
+  enabled: boolean;
+};
+
+export function toAutomations(states: HaState[]): Automation[] {
+  return states
+    .filter((s) => s.entity_id.startsWith("automation."))
+    .map((s) => ({
+      entityId: s.entity_id,
+      name: friendlyName(s, s.entity_id.replace(/^automation\./, "")),
+      id: typeof s.attributes["id"] === "string" ? s.attributes["id"] : null,
+      // "off" means the automation exists but will not fire. It is not deleted,
+      // and that distinction has to survive to the UI or a disabled schedule
+      // looks identical to a missing one.
+      enabled: s.state === "on",
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function saveAutomation(
+  id: string,
+  config: Record<string, unknown>,
+): Promise<void> {
+  await haFetch(`/api/config/automation/config/${encodeURIComponent(id)}`, {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+export async function deleteAutomation(id: string): Promise<void> {
+  await haFetch(`/api/config/automation/config/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 /** Cheap liveness probe used by the connection banner. */
 export async function ping(): Promise<boolean> {
   try {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
+  Clock,
   Lightbulb,
   LightbulbOff,
   Plus,
@@ -13,7 +14,12 @@ import {
   WifiOff,
 } from "lucide-react";
 import { apiUrl, postJson } from "@/lib/client";
-import type { LampView, SceneView, StateResponse } from "@/lib/types";
+import type {
+  AutomationView,
+  LampView,
+  SceneView,
+  StateResponse,
+} from "@/lib/types";
 
 /** How often to re-read state while the app is actually on screen. */
 const POLL_MS = 6_000;
@@ -26,6 +32,7 @@ export function ScenePicker() {
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const [sceneName, setSceneName] = useState("");
+  const [addingSchedule, setAddingSchedule] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -155,6 +162,35 @@ export function ScenePicker() {
       );
       if (!response.ok) throw new Error("Couldn't delete that scene");
       flash(`Deleted ${scene.label}`);
+    });
+  };
+
+  const createSchedule = (payload: Record<string, unknown>) =>
+    act("schedule", async () => {
+      await postJson("/api/automations", payload);
+      setAddingSchedule(false);
+      flash(`Scheduled: ${payload.name}`);
+    });
+
+  const toggleAutomation = (a: AutomationView) =>
+    act(a.entityId, async () => {
+      const response = await fetch(apiUrl("/api/automations"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId: a.entityId, enabled: !a.enabled }),
+      });
+      if (!response.ok) throw new Error("Couldn't change that schedule");
+    });
+
+  const removeAutomation = (a: AutomationView) => {
+    if (!a.id) return Promise.resolve();
+    return act(a.entityId, async () => {
+      const response = await fetch(
+        apiUrl(`/api/automations?id=${encodeURIComponent(a.id!)}`),
+        { method: "DELETE" },
+      );
+      if (!response.ok) throw new Error("Couldn't delete that schedule");
+      flash(`Deleted ${a.name}`);
     });
   };
 
@@ -397,6 +433,81 @@ export function ScenePicker() {
                       onHs={(v) => void setLamp(lamp, { hs: v })}
                     />
                   ))}
+                </div>
+              </Section>
+
+              <Section title="Schedules">
+                <div className="flex flex-col gap-2">
+                  {state.automations.map((a) => (
+                    <div
+                      key={a.entityId}
+                      className="flex items-center gap-2 p-2.5 rounded-[var(--r-md)]"
+                      style={{
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        opacity: a.enabled ? 1 : 0.55,
+                      }}
+                    >
+                      <button
+                        onClick={() => void toggleAutomation(a)}
+                        role="switch"
+                        aria-checked={a.enabled}
+                        aria-label={`${a.enabled ? "Disable" : "Enable"} ${a.name}`}
+                        className="shrink-0 rounded-[var(--r-pill)] transition-colors"
+                        style={{
+                          width: 42,
+                          height: 26,
+                          minHeight: 26,
+                          padding: 3,
+                          background: a.enabled ? "var(--accent)" : "var(--neutral-bg)",
+                        }}
+                      >
+                        <span
+                          className="block rounded-[var(--r-pill)] transition-transform"
+                          style={{
+                            width: 20,
+                            height: 20,
+                            background: "var(--surface)",
+                            transform: a.enabled ? "translateX(16px)" : "none",
+                          }}
+                        />
+                      </button>
+                      <span className="text-[14px] flex-1 min-w-0 break-words">
+                        {a.name}
+                      </span>
+                      {a.id && (
+                        <button
+                          onClick={() => void removeAutomation(a)}
+                          aria-label={`Delete ${a.name}`}
+                          className="shrink-0"
+                          style={{ minWidth: 34, color: "var(--text-muted)" }}
+                        >
+                          <Trash2 size={14} className="mx-auto" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+
+                  {addingSchedule ? (
+                    <ScheduleForm
+                      scenes={state.scenes}
+                      busy={pending === "schedule"}
+                      onCancel={() => setAddingSchedule(false)}
+                      onSave={(p) => void createSchedule(p)}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => setAddingSchedule(true)}
+                      className="flex items-center justify-center gap-1.5 rounded-[var(--r-md)] text-[13px] font-medium"
+                      style={{
+                        minHeight: 44,
+                        border: "1px dashed var(--border-strong)",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <Clock size={14} /> Add schedule
+                    </button>
+                  )}
                 </div>
               </Section>
             </div>
@@ -829,6 +940,167 @@ function Slider({
         }}
       />
     </label>
+  );
+}
+
+/**
+ * Create a schedule.
+ *
+ * Sun triggers are offered first and default to sunset, because "at 6pm" is
+ * wrong for most of the year — dark at 5pm in December, broad daylight at 8pm
+ * in June. "At sunset" is what people mean, and HA already tracks it.
+ */
+function ScheduleForm({
+  scenes,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  scenes: SceneView[];
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (payload: {
+    name: string;
+    when: "time" | "sunset" | "sunrise";
+    time: string;
+    offsetMinutes: number;
+    doWhat: "scene" | "allOff";
+    sceneEntityId?: string;
+  }) => void;
+}) {
+  const [when, setWhen] = useState<"time" | "sunset" | "sunrise">("sunset");
+  const [time, setTime] = useState("19:00");
+  const [offset, setOffset] = useState(0);
+  const [doWhat, setDoWhat] = useState<"scene" | "allOff">(
+    scenes.length ? "scene" : "allOff",
+  );
+  const [sceneId, setSceneId] = useState(scenes[0]?.entityId ?? "");
+
+  // A name nobody has to type. Most schedules are "<scene> at <when>", and
+  // making the user invent a label is pure friction on the common path.
+  const auto = (() => {
+    const what =
+      doWhat === "allOff"
+        ? "All off"
+        : (scenes.find((s) => s.entityId === sceneId)?.label ?? "Scene");
+    const w =
+      when === "time"
+        ? `at ${time}`
+        : offset === 0
+          ? `at ${when}`
+          : `${Math.abs(offset)}m ${offset < 0 ? "before" : "after"} ${when}`;
+    return `${what} ${w}`;
+  })();
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave({
+          name: auto,
+          when,
+          time,
+          offsetMinutes: offset,
+          doWhat,
+          sceneEntityId: doWhat === "scene" ? sceneId : undefined,
+        });
+      }}
+      className="rounded-[var(--r-md)] p-3 flex flex-col gap-3"
+      style={{ background: "var(--surface)", border: "1px solid var(--accent-border)" }}
+    >
+      <div>
+        <div className="text-[12px] text-[var(--text-secondary)] mb-1.5">When</div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {(["sunset", "sunrise", "time"] as const).map((w) => (
+            <Chip key={w} active={when === w} onClick={() => setWhen(w)}>
+              {w === "time" ? "Clock" : w[0].toUpperCase() + w.slice(1)}
+            </Chip>
+          ))}
+        </div>
+      </div>
+
+      {when === "time" ? (
+        <input
+          type="time"
+          value={time}
+          onChange={(e) => setTime(e.target.value)}
+          aria-label="Time"
+          style={{ minHeight: 44 }}
+        />
+      ) : (
+        <div className="grid grid-cols-3 gap-1.5">
+          {[-30, 0, 30].map((o) => (
+            <Chip key={o} active={offset === o} onClick={() => setOffset(o)}>
+              {o === 0 ? "Exactly" : o < 0 ? "30m before" : "30m after"}
+            </Chip>
+          ))}
+        </div>
+      )}
+
+      <div>
+        <div className="text-[12px] text-[var(--text-secondary)] mb-1.5">Do</div>
+        <div className="flex flex-col gap-1.5">
+          {scenes.length > 0 && (
+            <div className="flex gap-1.5">
+              <Chip active={doWhat === "scene"} onClick={() => setDoWhat("scene")}>
+                Apply scene
+              </Chip>
+              <Chip active={doWhat === "allOff"} onClick={() => setDoWhat("allOff")}>
+                All off
+              </Chip>
+            </div>
+          )}
+          {doWhat === "scene" && scenes.length > 0 && (
+            <select
+              value={sceneId}
+              onChange={(e) => setSceneId(e.target.value)}
+              aria-label="Scene"
+              className="rounded-[var(--r-md)] px-3"
+              style={{
+                minHeight: 44,
+                fontSize: 16,
+                background: "var(--surface-sunken)",
+                border: "1px solid var(--border-strong)",
+                color: "var(--text-primary)",
+              }}
+            >
+              {scenes.map((s) => (
+                <option key={s.entityId} value={s.entityId}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+
+      <div className="text-[12px] text-[var(--text-muted)]">
+        Will be saved as “{auto}”
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={busy}
+          className="flex-1 rounded-[var(--r-md)] text-[14px] font-medium disabled:opacity-40"
+          style={{
+            minHeight: 44,
+            background: "var(--accent)",
+            color: "var(--text-on-accent)",
+          }}
+        >
+          Create schedule
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-3 text-[14px]"
+          style={{ minHeight: 44, color: "var(--text-muted)" }}
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 

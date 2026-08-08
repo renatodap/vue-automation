@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 896 1200" width="896" height="1200">
+  <!-- Proposed default lamp placement, read off IMG_6211. Normalized (x,y) in the
+       comments are what goes in lamp_placement; the editor is what corrects them. -->
+  <image href="room-plate-dark.png" xlink:href="room-plate-dark.png" x="0" y="0" width="896" height="1200"/>
+  <defs>
+    <radialGradient id="glow">
+      <stop offset="0%"   stop-color="#ffa758" stop-opacity="0.95"/>
+      <stop offset="45%"  stop-color="#ffa758" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffa758" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g font-family="ui-sans-serif,system-ui" font-size="22" fill="#f5f1e8" text-anchor="middle">
+    <!-- abajour  (0.215, 0.795) : side table, near end of the sofa -->
+    <circle cx="192.640" cy="954.000" r="70" fill="url(#glow)"/>
+    <circle cx="192.640" cy="954.000" r="13" fill="#ffa758"/>
+    <text x="192.640" y="1012.000">abajour</text>
+
+    <!-- floor_lamp (0.215, 0.445) : arc lamp head, over the sofa -->
+    <circle cx="192.640" cy="534.000" r="70" fill="url(#glow)"/>
+    <circle cx="192.640" cy="534.000" r="13" fill="#ffa758"/>
+    <text x="192.640" y="592.000">floor</text>
+
+    <!-- shelf_lamp (0.185, 0.235) : on the ladder shelf -->
+    <circle cx="165.760" cy="282.000" r="70" fill="url(#glow)"/>
+    <circle cx="165.760" cy="282.000" r="13" fill="#ffa758"/>
+    <text x="165.760" y="340.000">shelf</text>
+
+    <!-- unnamed 0x7cb94c68286a0000 (0.785, 0.700) : near end of the TV console -->
+    <circle cx="703.360" cy="840.000" r="70" fill="url(#glow)"/>
+    <circle cx="703.360" cy="840.000" r="13" fill="#ffa758"/>
+    <text x="703.360" y="898.000">tv console (unnamed)</text>
+  </g>
+</svg>
