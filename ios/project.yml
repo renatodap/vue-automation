@@ -1,0 +1,84 @@
+name: VueLights
+options:
+  bundleIdPrefix: me.renatodap
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+packages:
+  VueLights:
+    path: .
+
+targets:
+  VueLights:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+      # The icon only. `App/Resources` as a whole is NOT a source path —
+      # Info.plist and the entitlements live there and are consumed by the build
+      # settings below; copying them in as resources would ship two conflicting
+      # copies.
+      - path: App/Resources/Assets.xcassets
+    dependencies:
+      - package: VueLights
+        product: VueLightsKit
+    info:
+      path: App/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Vue Lights
+        # Both reference the build settings rather than repeating their values.
+        # As literals, `xcodebuild CURRENT_PROJECT_VERSION=42` silently does
+        # nothing and every upload goes up as build 1 — which App Store Connect
+        # accepts once and then rejects forever.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false
+        # Siri needs more than one way to say the app's name. Every App Shortcut
+        # phrase must contain the app name or a synonym, and "Vue" alone is
+        # routinely heard as "view" — which is also why the pronunciation hints
+        # are here rather than left to chance.
+        #
+        # An array of DICTIONARIES, not of strings. The string form looks
+        # reasonable, builds, and then makes `appintentsnltrainingprocessor`
+        # fail the build with "Unable to parse Info.plist" — an error that names
+        # the file rather than the key, so it reads as a corrupt plist. Before
+        # that tool existed the same mistake would simply have produced an app
+        # Siri never answered to.
+        INAlternativeAppNames:
+          - INAlternativeAppName: Vue
+            INAlternativeAppNamePronunciationHint: vyoo
+          - INAlternativeAppName: Vue Lights
+            INAlternativeAppNamePronunciationHint: vyoo lights
+          - INAlternativeAppName: Lights
+          - INAlternativeAppName: Living Room
+        # Deep links: vuelights://scene/vue_movie
+        CFBundleURLTypes:
+          - CFBundleURLName: me.renatodap.vuelights
+            CFBundleURLSchemes: [vuelights]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.renatodap.vuelights
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        # iPhone only. Declaring iPad while UISupportedInterfaceOrientations
+        # lists portrait alone is rejected outright by App Store Connect: an iPad
+        # app must support all four orientations for multitasking.
+        TARGETED_DEVICE_FAMILY: "1"
+        # Required because GENERATE_INFOPLIST_FILE is NO — with a hand-written
+        # Info.plist Xcode does not infer the icon, and the omission surfaces at
+        # upload time as a rejection rather than as a build error.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: "YES"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: T59UJ8766W
+        GENERATE_INFOPLIST_FILE: "NO"
+        # No entitlements file and no capabilities on purpose. The first build's
+        # job is to prove signing and the upload path; every capability added
+        # here is another thing that can fail provisioning for a reason the log
+        # describes badly. The App Group arrives with the widget extension, which
+        # is the first thing that actually needs one.

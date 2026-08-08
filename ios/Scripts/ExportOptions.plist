@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Xcode 15+ spelling. The older value was `app-store`; both are accepted
+	     today but only this one is documented, and a wrong value exports
+	     successfully and produces an IPA App Store Connect then refuses. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+
+	<key>teamID</key>
+	<string>T59UJ8766W</string>
+
+	<!-- Let Xcode fetch or create the App Store profile against the API key
+	     rather than requiring one checked in. -->
+	<key>signingStyle</key>
+	<string>automatic</string>
+
+	<!-- Symbols go up so a crash report is readable. -->
+	<key>uploadSymbols</key>
+	<true/>
+
+	<!-- Bitcode has been dead since Xcode 14; naming it explicitly stops a
+	     future default from turning it back on. -->
+	<key>compileBitcode</key>
+	<false/>
+
+	<!-- Thinning is for local installs. An App Store upload must carry every
+	     variant, or the store has nothing to thin FROM. -->
+	<key>destination</key>
+	<string>upload</string>
+</dict>
+</plist>

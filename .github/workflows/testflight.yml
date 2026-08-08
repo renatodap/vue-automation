@@ -1,0 +1,101 @@
+# Every push that touches the app becomes a TestFlight build.
+#
+# Secrets this needs, under Settings → Secrets and variables → Actions:
+#   ASC_KEY_ID     App Store Connect API key id
+#   ASC_ISSUER_ID  the issuer UUID that key belongs to
+#   ASC_KEY_P8     that key's .p8, base64 encoded
+#
+# That is the whole list — there is deliberately no certificate secret. Signing
+# is CLOUD MANAGED: `-allowProvisioningUpdates` with the API key has Xcode fetch
+# the team's distribution certificate and the App Store profile from Apple on
+# each run. The private key for that certificate lives in the data-protection
+# keychain, which the `security` CLI cannot read, so it could not be exported to
+# a .p12 even if we wanted one — and it does not need to be.
+name: TestFlight
+
+on:
+  push:
+    branches: [main]
+    # The web app and the iOS app live in one repo so an API change and its
+    # client change land in the same commit. That is worth a path filter: a
+    # tweak to a Next.js route should not spend twenty minutes archiving an
+    # unchanged app.
+    paths:
+      - "ios/**"
+      - ".github/workflows/testflight.yml"
+  # So a build can be shipped after a flake, or from a branch, without an
+  # empty commit.
+  workflow_dispatch:
+
+concurrency:
+  # Two pushes in quick succession would otherwise race to upload, and the loser
+  # fails on a duplicate build number after burning a full archive.
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  ship:
+    # macos-26 for the toolchain rather than the OS: its default Xcode matches
+    # what this is developed against. Pinning the image is what stops a green
+    # local build failing in CI on an SDK that does not have a symbol.
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: ios
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # release.sh derives the build number from the commit count, which is
+          # 1 on the shallow clone Actions makes by default — so every build
+          # would be numbered 1 and every upload after the first rejected.
+          fetch-depth: 0
+
+      - name: Select Xcode
+        # The image's DEFAULT Xcode, not the newest installed. macos-26 carries
+        # several, and "newest" would silently follow the image onto a beta. The
+        # version is printed so a failure caused by the image moving is visible
+        # in the log rather than inferred from a compiler error three steps down.
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # No certificate import step. Signing is cloud managed — see the header.
+
+      - name: Install the App Store Connect API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          # The directory altool and xcodebuild look in by convention.
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$ASC_KEY_P8" | base64 --decode \
+            > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      # SIM is left unset on purpose — verify.sh picks a simulator the runner
+      # actually has.
+      - name: Build and test
+        run: ./Scripts/verify.sh
+
+      - name: Archive and upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: ./Scripts/release.sh
+
+      - name: Keep the build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ios/build/**/*.xcarchive/Info.plist
+            ~/Library/Logs/gym
+          if-no-files-found: ignore
