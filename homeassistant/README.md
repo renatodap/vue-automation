@@ -1,25 +1,29 @@
-# Home Assistant config
+# Home Assistant
 
-Versioned copies of what lives on the Pi. Home Assistant is the source of
-truth for scenes and device state; the PWA in `web/` only reads and triggers
-them.
+Home Assistant on the Pi is the source of truth for devices, scenes and
+schedules. The PWA in `web/` reads and writes them over its API.
 
-## Why the entity IDs are placeholders
+## There is no scenes.yaml here any more
 
-`scenes.yaml` cannot be finished until the four ThirdReality ZL1 bulbs are
-paired, because Zigbee2MQTT assigns entity IDs from the names given at pairing
-time. Pair first, name each bulb by **physical position** (`light.floor_lamp`,
-not `light.lamp_1` — you will not remember which is which in a month), then
-replace the placeholders.
+There used to be a template with placeholder entity IDs, to be filled in after
+pairing. It's gone, because the app now authors scenes directly through HA's
+scene-editor API — arrange the lamps, tap "Save current", name it. Keeping a
+YAML copy alongside that would be a second source of truth that silently drifts
+from the real one.
 
-## Applying it
+The same applies to schedules: created in the app, stored by HA.
 
-Home Assistant reads `scenes.yaml` from its config directory. Copy the file
-there and reload scenes from Developer Tools → YAML → Scenes, or restart HA.
+## The four lamps
 
-There is no automatic sync from this repo to the Pi. That is deliberate for
-now — an unattended config push into a running house is a bigger mechanism
-than four lamps justify.
+| Entity | Where |
+|---|---|
+| `light.shelf_lamp` | ladder shelf, right of the TV wall |
+| `light.floor_lamp` | arc lamp over the couch |
+| `light.abajour` | table lamp behind the couch, left |
+| `light.tv_lamp` | small lamp on the TV console |
+
+Named by physical position on purpose. `light.lamp_3` is unreadable a month
+later, and every scene in the system references these names.
 
 ## Migrations
 
