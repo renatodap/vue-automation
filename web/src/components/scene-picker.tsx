@@ -247,7 +247,24 @@ export function ScenePicker() {
                 </Banner>
               )}
 
-              <Section title="Scenes">
+              <Section
+                title="Scenes"
+                action={
+                  state.scenes.some((s) => s.id) && !saving ? (
+                    <button
+                      onClick={() => setEditing((v) => !v)}
+                      className="text-[12px] font-medium px-2 rounded-[var(--r-sm)]"
+                      style={{
+                        minHeight: 28,
+                        color: editing ? "var(--accent)" : "var(--text-muted)",
+                        background: editing ? "var(--accent-subtle)" : "transparent",
+                      }}
+                    >
+                      {editing ? "Done" : "Edit"}
+                    </button>
+                  ) : null
+                }
+              >
                 <div className="grid grid-cols-2 gap-2">
                   {state.scenes.map((s) => (
                     <div key={s.entityId} className="relative">
@@ -348,15 +365,6 @@ export function ScenePicker() {
                     </button>
                   )}
 
-                  {state.scenes.some((s) => s.id) && !saving && (
-                    <button
-                      onClick={() => setEditing((v) => !v)}
-                      className="text-[13px]"
-                      style={{ minHeight: 52, color: "var(--text-muted)" }}
-                    >
-                      {editing ? "Done" : "Edit"}
-                    </button>
-                  )}
                 </div>
               </Section>
 
@@ -758,12 +766,23 @@ function summarize(lamps: LampView[]): string {
   return parts.join(" · ");
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <section>
-      <h2 className="text-[12px] uppercase tracking-wide text-[var(--text-muted)] m-0 mb-2 font-medium">
-        {title}
-      </h2>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-[12px] uppercase tracking-wide text-[var(--text-muted)] m-0 font-medium">
+          {title}
+        </h2>
+        {action}
+      </div>
       {children}
     </section>
   );
