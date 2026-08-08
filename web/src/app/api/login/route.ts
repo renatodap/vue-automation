@@ -16,6 +16,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "bad request" }, { status: 400 });
   }
 
+  // Gate disabled — nothing to log in to.
+  if (!process.env.APP_PASSPHRASE) return NextResponse.json({ ok: true });
+
   let expected: string;
   let secret: string;
   try {

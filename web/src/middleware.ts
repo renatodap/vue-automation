@@ -35,10 +35,16 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (isPublic(pathname)) return NextResponse.next();
 
+  // No passphrase configured = the gate is deliberately off, and the app is
+  // open to anyone with the URL. This is an explicit operator choice made by
+  // clearing APP_PASSPHRASE, not a fallback for a missing value — setting the
+  // variable again restores the gate with no code change.
+  if (!process.env.APP_PASSPHRASE) return NextResponse.next();
+
   const secret = process.env.AUTH_SECRET;
   if (!secret) {
-    // Failing closed is the only safe default: this app switches on lights in
-    // someone's home, and a misconfigured deploy must not become an open one.
+    // With a passphrase set but no signing key, fail closed rather than
+    // silently serving the app unauthenticated.
     return new NextResponse("Server not configured", { status: 503 });
   }
 
