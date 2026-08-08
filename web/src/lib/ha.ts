@@ -111,6 +111,12 @@ export type Lamp = {
   minKelvin: number;
   maxKelvin: number;
   rgb: [number, number, number] | null;
+  /** [hue 0–360, saturation 0–100] when the bulb is in a colour mode. */
+  hs: [number, number] | null;
+  /** True when the bulb can do colour at all, not just white balance. */
+  supportsColor: boolean;
+  /** "color_temp" | "xy" | "hs" | … — what the bulb is doing right now. */
+  colorMode: string | null;
 };
 
 export type Scene = {
@@ -141,6 +147,9 @@ export function toLamps(states: HaState[]): Lamp[] {
 
       const minK = s.attributes["min_color_temp_kelvin"];
       const maxK = s.attributes["max_color_temp_kelvin"];
+      const hsRaw = s.attributes["hs_color"];
+      const modes = s.attributes["supported_color_modes"];
+      const colorMode = s.attributes["color_mode"];
 
       return {
         entityId: s.entity_id,
@@ -155,6 +164,14 @@ export function toLamps(states: HaState[]): Lamp[] {
         rgb: Array.isArray(rgbRaw) && rgbRaw.length === 3
           ? (rgbRaw as [number, number, number])
           : null,
+        hs: Array.isArray(hsRaw) && hsRaw.length === 2
+          ? (hsRaw as [number, number])
+          : null,
+        // xy and hs both mean "this bulb does colour" — the ZL1 reports xy.
+        supportsColor: Array.isArray(modes)
+          ? modes.some((m) => m === "xy" || m === "hs" || m === "rgb" || m === "rgbw" || m === "rgbww")
+          : false,
+        colorMode: typeof colorMode === "string" ? colorMode : null,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));

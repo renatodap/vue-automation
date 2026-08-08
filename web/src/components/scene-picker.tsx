@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Lightbulb,
   LightbulbOff,
   Power,
   RefreshCw,
+  Sun,
   WifiOff,
 } from "lucide-react";
 import { apiUrl, postJson } from "@/lib/client";
@@ -19,7 +20,6 @@ export function ScenePicker() {
   const [state, setState] = useState<StateResponse | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [showLamps, setShowLamps] = useState(false);
   const [openLamp, setOpenLamp] = useState<string | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -41,29 +41,23 @@ export function ScenePicker() {
   }, []);
 
   // Poll only while visible. A phone in a pocket polling a tailnet every six
-  // seconds burns battery to answer a question nobody is asking.
+  // seconds burns battery answering a question nobody is asking.
   useEffect(() => {
     void load();
     let timer: ReturnType<typeof setInterval> | null = null;
-
     const start = () => {
-      if (timer) return;
-      timer = setInterval(() => void load(), POLL_MS);
+      if (!timer) timer = setInterval(() => void load(), POLL_MS);
     };
     const stop = () => {
-      if (!timer) return;
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       timer = null;
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         void load();
         start();
-      } else {
-        stop();
-      }
+      } else stop();
     };
-
     if (document.visibilityState === "visible") start();
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
@@ -75,77 +69,87 @@ export function ScenePicker() {
   const flash = useCallback((message: string) => {
     setNotice(message);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    noticeTimer.current = setTimeout(() => setNotice(null), 4000);
+    noticeTimer.current = setTimeout(() => setNotice(null), 3500);
   }, []);
 
-  const activate = useCallback(
-    async (scene: SceneView) => {
-      setPending(scene.entityId);
+  const lamps = state?.ok ? state.lamps : [];
+  const reachable = useMemo(() => lamps.filter((l) => l.reachable), [lamps]);
+  const lit = useMemo(() => reachable.filter((l) => l.on), [reachable]);
+  const anyOn = lit.length > 0;
+
+  // The master sliders show where the room actually is, averaged over what's
+  // lit. Averaging over *all* lamps would drag the number toward zero every
+  // time one is off, and the control would lie about the room.
+  const avgBrightness = lit.length
+    ? Math.round(lit.reduce((s, l) => s + (l.brightness ?? 100), 0) / lit.length)
+    : 60;
+  const avgKelvin = (() => {
+    const withK = lit.filter((l) => l.kelvin);
+    return withK.length
+      ? Math.round(withK.reduce((s, l) => s + (l.kelvin ?? 0), 0) / withK.length)
+      : 2700;
+  })();
+  // Intersect the ranges so the master slider can never ask a bulb for a value
+  // it cannot reach — that fails silently and the lamp just doesn't move.
+  const minKelvin = Math.max(2000, ...lamps.map((l) => l.minKelvin));
+  const maxKelvin = Math.min(6500, ...lamps.map((l) => l.maxKelvin));
+  const masterHs = lit.find((l) => l.hs)?.hs ?? null;
+
+  const act = useCallback(
+    async (key: string, run: () => Promise<void>, message?: string) => {
+      setPending(key);
       try {
-        const result = await postJson<{ unreachable: string[] }>("/api/scene", {
+        await run();
+        if (message) flash(message);
+      } catch (error) {
+        flash(error instanceof Error ? error.message : "That didn't go through");
+      } finally {
+        setPending(null);
+        void load();
+      }
+    },
+    [flash, load],
+  );
+
+  const activate = (scene: SceneView) =>
+    act(
+      scene.entityId,
+      async () => {
+        const r = await postJson<{ unreachable: string[] }>("/api/scene", {
           entityId: scene.entityId,
         });
-        // Report the partial application rather than letting silence read as
-        // success — this is the whole reason the route re-reads state.
-        if (result.unreachable.length > 0) {
-          flash(
-            `${scene.label} applied — couldn't reach ${result.unreachable.join(", ")}`,
-          );
-        } else {
-          flash(`${scene.label}`);
-        }
-      } catch (error) {
-        flash(error instanceof Error ? error.message : "Couldn't apply that scene");
-      } finally {
-        setPending(null);
-        void load();
-      }
-    },
-    [flash, load],
-  );
+        // Report partial application — HA applies a scene to what it can reach
+        // and stays silent about the rest, and silence reads as success.
+        flash(
+          r.unreachable.length
+            ? `${scene.label} — couldn't reach ${r.unreachable.join(", ")}`
+            : scene.label,
+        );
+      },
+    );
 
-  const allOff = useCallback(async () => {
-    setPending("all-off");
-    try {
-      const lamps = state?.ok ? state.lamps.filter((l) => l.reachable) : [];
-      await Promise.all(
-        lamps.map((l) => postJson("/api/light", { entityId: l.entityId, on: false })),
-      );
-      flash("Everything off");
-    } catch {
-      flash("Couldn't turn everything off");
-    } finally {
-      setPending(null);
-      void load();
-    }
-  }, [state, flash, load]);
+  const setAll = (patch: {
+    on?: boolean;
+    brightness?: number;
+    kelvin?: number;
+    hs?: [number, number];
+  }) => {
+    const targets = (patch.on === false ? lit : reachable).map((l) => l.entityId);
+    if (!targets.length) return Promise.resolve();
+    return act("master", () => postJson("/api/light", { entityIds: targets, ...patch }));
+  };
 
-  const setLamp = useCallback(
-    async (
-      lamp: LampView,
-      patch: { on?: boolean; brightness?: number; kelvin?: number },
-    ) => {
-      setPending(lamp.entityId);
-      try {
-        await postJson("/api/light", { entityId: lamp.entityId, ...patch });
-      } catch (error) {
-        flash(error instanceof Error ? error.message : "Couldn't change that lamp");
-      } finally {
-        setPending(null);
-        void load();
-      }
-    },
-    [flash, load],
-  );
-
-  const anyOn = state?.ok ? state.lamps.some((l) => l.on) : false;
+  const setLamp = (
+    lamp: LampView,
+    patch: { on?: boolean; brightness?: number; kelvin?: number; hs?: [number, number] },
+  ) => act(lamp.entityId, () => postJson("/api/light", { entityId: lamp.entityId, ...patch }));
 
   return (
     <div className="app">
       <header className="flex items-baseline justify-between gap-3">
-        <div>
-          <h1 className="text-[26px] font-semibold tracking-tight m-0">Living Room</h1>
-          <p className="text-[13px] text-[var(--text-muted)] m-0 mt-0.5">
+        <div className="min-w-0">
+          <h1 className="text-[25px] font-semibold tracking-tight m-0">Living Room</h1>
+          <p className="text-[13px] text-[var(--text-muted)] m-0 mt-0.5 truncate">
             {state === null
               ? "Connecting…"
               : state.ok
@@ -156,10 +160,10 @@ export function ScenePicker() {
         <button
           onClick={() => void load()}
           aria-label="Refresh"
-          className="text-[var(--text-muted)] active:text-[var(--accent)] active:scale-90 transition-transform"
+          className="text-[var(--text-muted)] active:scale-90 transition-transform shrink-0"
           style={{ minWidth: 44 }}
         >
-          <RefreshCw size={18} />
+          <RefreshCw size={17} />
         </button>
       </header>
 
@@ -167,127 +171,326 @@ export function ScenePicker() {
         {state && !state.ok && <Disconnected message={state.message} onRetry={load} />}
 
         {state?.ok && (
-          <>
-            {state.unreachableCount > 0 && (
-              <Banner>
-                {state.unreachableCount === 1
-                  ? "1 lamp is unreachable — check its switch is on."
-                  : `${state.unreachableCount} lamps are unreachable — check their switches are on.`}
-              </Banner>
-            )}
+          <div className="panels">
+            <div className="flex flex-col gap-4 min-w-0">
+              {state.unreachableCount > 0 && (
+                <Banner>
+                  {state.unreachableCount === 1
+                    ? "1 lamp unreachable — check its switch."
+                    : `${state.unreachableCount} lamps unreachable — check their switches.`}
+                </Banner>
+              )}
 
-            {state.scenes.length === 0 ? (
-              <EmptyScenes />
-            ) : (
-              <div className="grid grid-cols-2 gap-3 mt-1">
-                {state.scenes.map((scene) => (
-                  <SceneCard
-                    key={scene.entityId}
-                    scene={scene}
-                    busy={pending === scene.entityId}
-                    onTap={() => void activate(scene)}
+              {state.scenes.length > 0 && (
+                <Section title="Scenes">
+                  <div className="grid grid-cols-2 gap-2">
+                    {state.scenes.map((s) => (
+                      <button
+                        key={s.entityId}
+                        onClick={() => void activate(s)}
+                        disabled={pending === s.entityId}
+                        className="flex items-center gap-2 px-3 rounded-[var(--r-md)] text-left transition-all active:scale-[0.97]"
+                        style={{
+                          minHeight: 52,
+                          background: "var(--surface)",
+                          border: "1px solid var(--border)",
+                          boxShadow:
+                            pending === s.entityId ? "var(--glow-accent)" : "none",
+                        }}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ background: s.accent ?? "var(--accent)" }}
+                        />
+                        <span className="text-[14px] font-medium leading-tight break-words">
+                          {s.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              {/* Master. This is the section that removes the most work: warming
+                  or dimming the whole room used to mean opening four lamps. */}
+              <Section title="All lamps">
+                <div
+                  className="rounded-[var(--r-md)] p-3 flex flex-col gap-3.5"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+                >
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => void setAll({ on: true, brightness: avgBrightness })}
+                      disabled={pending === "master" || !reachable.length}
+                      className="flex items-center justify-center gap-1.5 rounded-[var(--r-sm)] text-[14px] font-medium disabled:opacity-35"
+                      style={{
+                        minHeight: 44,
+                        background: anyOn ? "var(--accent-subtle)" : "var(--accent)",
+                        color: anyOn ? "var(--accent)" : "var(--text-on-accent)",
+                        border: "1px solid var(--accent-border)",
+                      }}
+                    >
+                      <Sun size={15} /> All on
+                    </button>
+                    <button
+                      onClick={() => void setAll({ on: false })}
+                      disabled={pending === "master" || !anyOn}
+                      className="flex items-center justify-center gap-1.5 rounded-[var(--r-sm)] text-[14px] font-medium disabled:opacity-35"
+                      style={{
+                        minHeight: 44,
+                        background: "var(--neutral-bg)",
+                        color: "var(--neutral-fg)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      <Power size={15} /> All off
+                    </button>
+                  </div>
+
+                  <Controls
+                    idPrefix="All lamps"
+                    brightness={avgBrightness}
+                    kelvin={avgKelvin}
+                    minKelvin={minKelvin}
+                    maxKelvin={maxKelvin}
+                    hs={masterHs}
+                    supportsColor={reachable.some((l) => l.supportsColor)}
+                    inColorMode={lit.length > 0 && lit.every((l) => l.colorMode !== "color_temp")}
+                    disabled={!reachable.length}
+                    onBrightness={(v) => void setAll({ brightness: v })}
+                    onKelvin={(v) => void setAll({ kelvin: v })}
+                    onHs={(v) => void setAll({ hs: v })}
                   />
-                ))}
-              </div>
-            )}
+                </div>
+              </Section>
+            </div>
 
-            <button
-              onClick={() => setShowLamps((v) => !v)}
-              className="mt-6 mb-1 text-[13px] text-[var(--text-muted)] active:text-[var(--text-primary)] w-full text-left"
-              style={{ minHeight: 32 }}
-            >
-              {showLamps ? "Hide lamps" : `Lamps (${state.lamps.length})`}
-            </button>
-
-            {showLamps && (
-              <div className="flex flex-col gap-2">
-                {state.lamps.map((lamp) => (
-                  <LampRow
-                    key={lamp.entityId}
-                    lamp={lamp}
-                    busy={pending === lamp.entityId}
-                    open={openLamp === lamp.entityId}
-                    onOpen={() =>
-                      setOpenLamp((c) => (c === lamp.entityId ? null : lamp.entityId))
-                    }
-                    onToggle={() => void setLamp(lamp, { on: !lamp.on })}
-                    onBrightness={(v) => void setLamp(lamp, { brightness: v })}
-                    onKelvin={(v) => void setLamp(lamp, { kelvin: v })}
-                  />
-                ))}
-              </div>
-            )}
-          </>
+            <div className="min-w-0">
+              <Section title={`Lamps (${lamps.length})`}>
+                <div className="flex flex-col gap-2">
+                  {lamps.length === 0 && <Empty />}
+                  {lamps.map((lamp) => (
+                    <LampRow
+                      key={lamp.entityId}
+                      lamp={lamp}
+                      busy={pending === lamp.entityId}
+                      open={openLamp === lamp.entityId}
+                      onOpen={() =>
+                        setOpenLamp((c) => (c === lamp.entityId ? null : lamp.entityId))
+                      }
+                      onToggle={() => void setLamp(lamp, { on: !lamp.on })}
+                      onBrightness={(v) => void setLamp(lamp, { brightness: v })}
+                      onKelvin={(v) => void setLamp(lamp, { kelvin: v })}
+                      onHs={(v) => void setLamp(lamp, { hs: v })}
+                    />
+                  ))}
+                </div>
+              </Section>
+            </div>
+          </div>
         )}
       </main>
 
-      <footer className="flex items-center justify-between gap-3">
+      <footer className="flex items-center">
         <span
-          className="text-[13px] truncate"
+          className="text-[13px] truncate transition-colors"
           style={{ color: notice ? "var(--accent)" : "var(--text-muted)" }}
         >
-          {notice ?? (state?.ok ? "Tap a scene" : "")}
+          {notice ?? (state?.ok ? "Tap a scene, or adjust everything above" : "")}
         </span>
-        <button
-          onClick={() => void allOff()}
-          disabled={!anyOn || pending === "all-off"}
-          className="flex items-center gap-1.5 px-3.5 rounded-[var(--r-pill)] text-[14px] font-medium transition-colors disabled:opacity-35"
-          style={{
-            minHeight: 40,
-            background: "var(--neutral-bg)",
-            color: "var(--neutral-fg)",
-          }}
-        >
-          <Power size={15} />
-          All off
-        </button>
       </footer>
     </div>
   );
 }
 
+const TEMP_GRADIENT =
+  "linear-gradient(90deg,#ff9329 0%,#ffb765 18%,#ffd6aa 38%,#fff4e8 55%,#f2f4ff 74%,#cfdcff 100%)";
+
+/** Full hue wheel laid flat. 0 and 360 are both red so the ends meet. */
+const HUE_GRADIENT =
+  "linear-gradient(90deg,#ff0000 0%,#ffff00 17%,#00ff00 33%,#00ffff 50%,#0000ff 67%,#ff00ff 83%,#ff0000 100%)";
+
+/** One tap for the colours people actually reach for. */
+const SWATCHES: { name: string; hs: [number, number] }[] = [
+  { name: "Red", hs: [0, 100] },
+  { name: "Orange", hs: [28, 100] },
+  { name: "Yellow", hs: [52, 95] },
+  { name: "Green", hs: [120, 90] },
+  { name: "Teal", hs: [175, 85] },
+  { name: "Blue", hs: [225, 95] },
+  { name: "Violet", hs: [275, 85] },
+  { name: "Pink", hs: [320, 75] },
+];
+
+function hsToCss([h, s]: [number, number], light = 50): string {
+  return `hsl(${h} ${s}% ${light}%)`;
+}
+
+/**
+ * The full control surface for one lamp or for every lamp at once.
+ *
+ * White and colour are separate modes because the bulb treats them that way —
+ * it is either holding a colour temperature or holding a hue, never both. A UI
+ * that showed all three sliders at once would imply they compose, and the user
+ * would keep discovering that moving one silently discards another.
+ */
+function Controls({
+  brightness,
+  kelvin,
+  minKelvin,
+  maxKelvin,
+  hs,
+  supportsColor,
+  inColorMode,
+  disabled,
+  onBrightness,
+  onKelvin,
+  onHs,
+  idPrefix,
+}: {
+  brightness: number;
+  kelvin: number;
+  minKelvin: number;
+  maxKelvin: number;
+  hs: [number, number] | null;
+  supportsColor: boolean;
+  inColorMode: boolean;
+  disabled?: boolean;
+  onBrightness: (v: number) => void;
+  onKelvin: (v: number) => void;
+  onHs: (v: [number, number]) => void;
+  idPrefix: string;
+}) {
+  const [mode, setMode] = useState<"white" | "color">(inColorMode ? "color" : "white");
+  const hue = hs?.[0] ?? 30;
+  const sat = hs?.[1] ?? 80;
+
+  // Follow the lamp when a scene or another device switches its mode, so the
+  // tab always describes what the light is actually doing.
+  useEffect(() => setMode(inColorMode ? "color" : "white"), [inColorMode]);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Slider
+        label="Intensity"
+        value={brightness}
+        min={1}
+        max={100}
+        suffix="%"
+        disabled={disabled}
+        onCommit={onBrightness}
+        ariaLabel={`${idPrefix} brightness`}
+      />
+
+      {supportsColor && (
+        <div
+          className="grid grid-cols-2 gap-1 p-0.5 rounded-[var(--r-sm)]"
+          style={{ background: "var(--surface-sunken)" }}
+          role="tablist"
+        >
+          {(["white", "color"] as const).map((m) => (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => setMode(m)}
+              disabled={disabled}
+              className="rounded-[var(--r-xs,4px)] text-[13px] font-medium transition-colors"
+              style={{
+                minHeight: 34,
+                background: mode === m ? "var(--surface)" : "transparent",
+                color: mode === m ? "var(--text-primary)" : "var(--text-muted)",
+                boxShadow: mode === m ? "var(--shadow-sm)" : "none",
+              }}
+            >
+              {m === "white" ? "White" : "Colour"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {mode === "white" || !supportsColor ? (
+        <Slider
+          label="Temperature"
+          value={kelvin}
+          min={minKelvin}
+          max={maxKelvin}
+          step={50}
+          suffix="K"
+          disabled={disabled}
+          trackImage={TEMP_GRADIENT}
+          onCommit={onKelvin}
+          ariaLabel={`${idPrefix} colour temperature`}
+        />
+      ) : (
+        <>
+          <div className="flex gap-1.5 flex-wrap">
+            {SWATCHES.map((s) => (
+              <button
+                key={s.name}
+                onClick={() => onHs(s.hs)}
+                disabled={disabled}
+                aria-label={s.name}
+                title={s.name}
+                className="rounded-[var(--r-pill)] active:scale-90 transition-transform"
+                style={{
+                  width: 32,
+                  height: 32,
+                  minHeight: 32,
+                  background: hsToCss(s.hs),
+                  border:
+                    hs && Math.abs(hs[0] - s.hs[0]) < 8
+                      ? "2px solid var(--text-primary)"
+                      : "1px solid var(--border-strong)",
+                }}
+              />
+            ))}
+          </div>
+          <Slider
+            label="Hue"
+            value={hue}
+            min={0}
+            max={360}
+            suffix="°"
+            disabled={disabled}
+            trackImage={HUE_GRADIENT}
+            onCommit={(v) => onHs([v, sat])}
+            ariaLabel={`${idPrefix} hue`}
+          />
+          <Slider
+            label="Saturation"
+            value={sat}
+            min={0}
+            max={100}
+            suffix="%"
+            disabled={disabled}
+            trackImage={`linear-gradient(90deg,#ffffff 0%,${hsToCss([hue, 100])} 100%)`}
+            onCommit={(v) => onHs([hue, v])}
+            ariaLabel={`${idPrefix} saturation`}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
 function summarize(lamps: LampView[]): string {
+  if (!lamps.length) return "No lamps paired yet";
   const on = lamps.filter((l) => l.on).length;
   const out = lamps.filter((l) => !l.reachable).length;
-  if (lamps.length === 0) return "No lights paired yet";
   const parts = [on === 0 ? "All off" : `${on} of ${lamps.length} on`];
-  if (out > 0) parts.push(`${out} unreachable`);
+  if (out) parts.push(`${out} unreachable`);
   return parts.join(" · ");
 }
 
-function SceneCard({
-  scene,
-  busy,
-  onTap,
-}: {
-  scene: SceneView;
-  busy: boolean;
-  onTap: () => void;
-}) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <button
-      onClick={onTap}
-      disabled={busy}
-      className="relative flex flex-col justify-end text-left p-4 rounded-[var(--r-lg)] transition-all duration-150 active:scale-[0.97]"
-      style={{
-        minHeight: 104,
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        boxShadow: busy ? "var(--glow-accent)" : "var(--shadow-sm)",
-        opacity: busy ? 0.85 : 1,
-      }}
-    >
-      <span
-        className="absolute top-3.5 left-4 w-2 h-2 rounded-full"
-        style={{ background: scene.accent ?? "var(--accent)" }}
-      />
-      <span className="text-[15px] font-medium leading-tight">{scene.label}</span>
-      {scene.tapCount > 0 && (
-        <span className="text-[12px] text-[var(--text-muted)] mt-0.5">
-          {scene.tapCount} {scene.tapCount === 1 ? "use" : "uses"}
-        </span>
-      )}
-    </button>
+    <section>
+      <h2 className="text-[12px] uppercase tracking-wide text-[var(--text-muted)] m-0 mb-2 font-medium">
+        {title}
+      </h2>
+      {children}
+    </section>
   );
 }
 
@@ -299,6 +502,7 @@ function LampRow({
   onToggle,
   onBrightness,
   onKelvin,
+  onHs,
 }: {
   lamp: LampView;
   busy: boolean;
@@ -307,41 +511,40 @@ function LampRow({
   onToggle: () => void;
   onBrightness: (value: number) => void;
   onKelvin: (value: number) => void;
+  onHs: (value: [number, number]) => void;
 }) {
   const canAdjust = lamp.reachable && lamp.on;
 
   return (
     <div
-      className="rounded-[var(--r-md)] overflow-hidden"
+      className="rounded-[var(--r-md)]"
       style={{
         background: "var(--surface)",
         border: "1px solid var(--border)",
         opacity: lamp.reachable ? 1 : 0.5,
       }}
     >
-      <div className="flex items-center gap-3 p-3">
+      <div className="flex items-center gap-2 p-2.5">
         <button
           onClick={onToggle}
           disabled={!lamp.reachable || busy}
           aria-label={lamp.on ? `Turn off ${lamp.name}` : `Turn on ${lamp.name}`}
           className="shrink-0 active:scale-90 transition-transform"
-          style={{
-            minWidth: 44,
-            color: lamp.on ? "var(--accent)" : "var(--text-muted)",
-          }}
+          style={{ minWidth: 44, color: lamp.on ? "var(--accent)" : "var(--text-muted)" }}
         >
           {lamp.reachable ? (
-            lamp.on ? <Lightbulb size={20} /> : <LightbulbOff size={20} />
+            lamp.on ? <Lightbulb size={19} /> : <LightbulbOff size={19} />
           ) : (
-            <WifiOff size={20} />
+            <WifiOff size={19} />
           )}
         </button>
 
         <button
           onClick={onOpen}
           disabled={!canAdjust}
-          className="min-w-0 flex-1 text-left disabled:cursor-default"
           aria-expanded={open}
+          className="min-w-0 flex-1 text-left disabled:cursor-default"
+          style={{ minHeight: 40 }}
         >
           {/* Never truncate a device name — wrap instead. */}
           <div className="text-[14px] leading-tight break-words">{lamp.name}</div>
@@ -356,7 +559,7 @@ function LampRow({
 
         {canAdjust && (
           <ChevronDown
-            size={16}
+            size={15}
             className="shrink-0 text-[var(--text-muted)] transition-transform"
             style={{ transform: open ? "rotate(180deg)" : "none" }}
           />
@@ -364,28 +567,19 @@ function LampRow({
       </div>
 
       {open && canAdjust && (
-        <div className="px-3 pb-3.5 pt-1 flex flex-col gap-3.5">
-          <Slider
-            label="Intensity"
-            value={lamp.brightness ?? 100}
-            min={1}
-            max={100}
-            suffix="%"
-            onCommit={onBrightness}
-            ariaLabel={`${lamp.name} brightness`}
-          />
-          <Slider
-            label="Temperature"
-            value={lamp.kelvin ?? 2700}
-            min={lamp.minKelvin}
-            max={lamp.maxKelvin}
-            suffix="K"
-            step={50}
-            // The track is the scale: warm on the left, cool on the right, so
-            // the control looks like what it does before you read the number.
-            trackImage="linear-gradient(90deg,#ff9329 0%,#ffb765 18%,#ffd6aa 38%,#fff4e8 55%,#f2f4ff 74%,#cfdcff 100%)"
-            onCommit={onKelvin}
-            ariaLabel={`${lamp.name} colour temperature`}
+        <div className="px-3 pb-3">
+          <Controls
+            idPrefix={lamp.name}
+            brightness={lamp.brightness ?? 100}
+            kelvin={lamp.kelvin ?? 2700}
+            minKelvin={lamp.minKelvin}
+            maxKelvin={lamp.maxKelvin}
+            hs={lamp.hs}
+            supportsColor={lamp.supportsColor}
+            inColorMode={lamp.colorMode !== null && lamp.colorMode !== "color_temp"}
+            onBrightness={onBrightness}
+            onKelvin={onKelvin}
+            onHs={onHs}
           />
         </div>
       )}
@@ -394,7 +588,7 @@ function LampRow({
 }
 
 /**
- * Commit on release, not on every input event.
+ * Commits on release, not on every input event.
  *
  * A slider fires continuously while dragging; forwarding each frame to Zigbee
  * floods a mesh that manages a few messages a second, and the lamp ends up
@@ -408,6 +602,7 @@ function Slider({
   step = 1,
   suffix,
   trackImage,
+  disabled,
   onCommit,
   ariaLabel,
 }: {
@@ -418,21 +613,22 @@ function Slider({
   step?: number;
   suffix: string;
   trackImage?: string;
+  disabled?: boolean;
   onCommit: (value: number) => void;
   ariaLabel: string;
 }) {
   const [local, setLocal] = useState(value);
-
-  // Follow the lamp when it changes underneath us (a scene fired, another
-  // device moved it) — but never while the user is mid-drag.
   const [dragging, setDragging] = useState(false);
+
+  // Follow the lamp when it moves underneath us (a scene fired, another device
+  // changed it) — but never while a thumb is down, which would fight the user.
   useEffect(() => {
     if (!dragging) setLocal(value);
   }, [value, dragging]);
 
   return (
-    <label className="block">
-      <span className="flex items-baseline justify-between mb-1.5">
+    <label className="block" style={{ opacity: disabled ? 0.4 : 1 }}>
+      <span className="flex items-baseline justify-between mb-1">
         <span className="text-[12px] text-[var(--text-secondary)]">{label}</span>
         <span className="text-[12px] tabular-nums text-[var(--text-muted)]">
           {Math.round(local)}
@@ -445,6 +641,7 @@ function Slider({
         max={max}
         step={step}
         value={local}
+        disabled={disabled}
         aria-label={ariaLabel}
         onChange={(e) => {
           setDragging(true);
@@ -458,10 +655,10 @@ function Slider({
           setDragging(false);
           onCommit(Number(e.currentTarget.value));
         }}
-        className={trackImage ? "temp-range" : ""}
+        className={trackImage ? "temp-range" : "plain-range"}
         style={{
           width: "100%",
-          minHeight: 44,
+          minHeight: 40,
           padding: 0,
           accentColor: "var(--accent)",
           ...(trackImage ? { ["--track-image" as string]: trackImage } : {}),
@@ -474,7 +671,7 @@ function Slider({
 function Banner({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="text-[13px] px-3.5 py-2.5 rounded-[var(--r-md)] mb-3"
+      className="text-[13px] px-3 py-2 rounded-[var(--r-sm)]"
       style={{
         background: "var(--warning-bg)",
         color: "var(--warning)",
@@ -486,22 +683,14 @@ function Banner({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Disconnected({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
+function Disconnected({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div
       className="flex flex-col items-center text-center gap-3 py-14 px-6 rounded-[var(--r-lg)]"
       style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
     >
       <WifiOff size={26} className="text-[var(--text-muted)]" />
-      <p className="text-[14px] text-[var(--text-secondary)] m-0 max-w-[36ch]">
-        {message}
-      </p>
+      <p className="text-[14px] text-[var(--text-secondary)] m-0 max-w-[36ch]">{message}</p>
       <button
         onClick={onRetry}
         className="px-4 rounded-[var(--r-pill)] text-[14px] font-medium"
@@ -517,18 +706,17 @@ function Disconnected({
   );
 }
 
-function EmptyScenes() {
+function Empty() {
   return (
     <div
-      className="py-12 px-6 text-center rounded-[var(--r-lg)]"
+      className="py-8 px-5 text-center rounded-[var(--r-md)]"
       style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
     >
-      <p className="text-[14px] text-[var(--text-secondary)] m-0">
-        No scenes yet.
+      <p className="text-[13px] text-[var(--text-secondary)] m-0">
+        No lamps paired yet.
       </p>
-      <p className="text-[13px] text-[var(--text-muted)] m-0 mt-1.5 max-w-[38ch] mx-auto">
-        Add them to Home Assistant and they'll appear here — the app reads the
-        scene list rather than keeping its own.
+      <p className="text-[12px] text-[var(--text-muted)] m-0 mt-1">
+        Pair them in Zigbee2MQTT and they appear here.
       </p>
     </div>
   );

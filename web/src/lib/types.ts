@@ -19,6 +19,9 @@ export type LampView = {
   minKelvin: number;
   maxKelvin: number;
   rgb: [number, number, number] | null;
+  hs: [number, number] | null;
+  supportsColor: boolean;
+  colorMode: string | null;
 };
 
 export type StateResponse =

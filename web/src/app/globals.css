@@ -233,6 +233,24 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* Responsive: one column on a phone, two side by side once there's room —
+   so scenes/master and the lamp list are visible together without scrolling.
+   The shell stays a 3-row grid either way; only the middle row re-flows. */
+.panels {
+  display: grid;
+  gap: 16px;
+  align-items: start;
+}
+@media (min-width: 700px) {
+  .app {
+    max-width: 940px;
+  }
+  .panels {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 22px;
+  }
+}
+
 /* Colour-temperature slider: the track carries the actual gradient it selects,
    so the control reads as warm→cool before you look at the number. Needs the
    vendor-specific track pseudo-elements — there is no cross-browser shorthand. */
