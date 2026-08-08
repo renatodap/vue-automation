@@ -87,6 +87,11 @@ export async function POST(request: NextRequest) {
       actions: [action],
       // "single" so a schedule that somehow fires twice doesn't stack runs.
       mode: "single",
+      // Pin the enabled state across reloads and restarts. Without this an
+      // automation can come back disabled after a reload and silently never
+      // fire again — the failure mode where nothing errors, the schedule just
+      // stops happening and you notice weeks later.
+      initial_state: true,
     });
     return NextResponse.json({ ok: true, id });
   } catch (error) {
