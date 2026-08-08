@@ -129,8 +129,20 @@ enum Placement {
 struct RoomCanvas: View {
     @Environment(AppModel.self) private var model
 
+    /// The plate's own aspect ratio. Placement is normalized against the IMAGE,
+    /// so this has to be known rather than inferred from the container.
+    private static let plateAspect: CGFloat = 896.0 / 1200.0
+
     var body: some View {
         GeometryReader { geo in
+            // Where the plate actually lands after `.fit` letterboxes it.
+            //
+            // Positioning lamps against `geo.size` is wrong and looks almost
+            // right, which is worse: the further the container's aspect is from
+            // the plate's, the further every lamp drifts from the furniture it
+            // is supposed to be sitting on.
+            let fitted = Self.fit(Self.plateAspect, in: geo.size)
+
             ZStack {
                 Image("room-plate", bundle: .module)
                     .resizable()
@@ -141,7 +153,8 @@ struct RoomCanvas: View {
                 ForEach(Array(model.state.lamps.enumerated()), id: \.element.entityId) { index, lamp in
                     let p = Placement.point(for: lamp, index: index, of: model.state.lamps.count)
                     LampMarker(lamp: lamp)
-                        .position(x: geo.size.width * p.x, y: geo.size.height * p.y)
+                        .position(x: fitted.minX + fitted.width * p.x,
+                                  y: fitted.minY + fitted.height * p.y)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -153,6 +166,19 @@ struct RoomCanvas: View {
         }
         .padding(.horizontal, Metrics.space2)
         .frame(maxHeight: .infinity)
+    }
+
+    /// The rect an aspect-fitted image occupies inside a container.
+    static func fit(_ aspect: CGFloat, in size: CGSize) -> CGRect {
+        guard size.width > 0, size.height > 0, aspect > 0 else { return .zero }
+        let containerAspect = size.width / size.height
+        let fittedSize = containerAspect > aspect
+            ? CGSize(width: size.height * aspect, height: size.height)   // pillarboxed
+            : CGSize(width: size.width, height: size.width / aspect)     // letterboxed
+        return CGRect(
+            x: (size.width - fittedSize.width) / 2,
+            y: (size.height - fittedSize.height) / 2,
+            width: fittedSize.width, height: fittedSize.height)
     }
 }
 

@@ -41,12 +41,6 @@
 		</dict>
 		<dict>
 			<key>INAlternativeAppName</key>
-			<string>Vue Lights</string>
-			<key>INAlternativeAppNamePronunciationHint</key>
-			<string>vyoo lights</string>
-		</dict>
-		<dict>
-			<key>INAlternativeAppName</key>
 			<string>Lights</string>
 		</dict>
 		<dict>

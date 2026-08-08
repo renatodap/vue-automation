@@ -48,11 +48,16 @@ targets:
         # the file rather than the key, so it reads as a corrupt plist. Before
         # that tool existed the same mistake would simply have produced an app
         # Siri never answered to.
+        #
+        # THREE, maximum. A fourth builds, archives and uploads without
+        # complaint and is then refused at INSTALL time — "has 4
+        # INAlternativeAppNames in its Info.plist, maximum of 3 allowed" — so the
+        # first sign of it is a TestFlight build that will not open. The app's
+        # own display name does not count against the three, which is why
+        # "Vue Lights" is not repeated here.
         INAlternativeAppNames:
           - INAlternativeAppName: Vue
             INAlternativeAppNamePronunciationHint: vyoo
-          - INAlternativeAppName: Vue Lights
-            INAlternativeAppNamePronunciationHint: vyoo lights
           - INAlternativeAppName: Lights
           - INAlternativeAppName: Living Room
         # Deep links: vuelights://scene/vue_movie
