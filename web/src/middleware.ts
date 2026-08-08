@@ -33,6 +33,18 @@ function isPublic(pathname: string): boolean {
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // With the gate off, /login is a dead end that should not exist. Devices
+  // holding a cached shell from when the gate WAS on will still navigate here,
+  // and a 200 keeps showing them a form for a passphrase that no longer does
+  // anything. Bounce them into the app instead of asking them to clear caches.
+  if (pathname === "/login" && !process.env.APP_PASSPHRASE) {
+    const home = request.nextUrl.clone();
+    home.pathname = "/";
+    home.search = "";
+    return NextResponse.redirect(home);
+  }
+
   if (isPublic(pathname)) return NextResponse.next();
 
   // No passphrase configured = the gate is deliberately off, and the app is
