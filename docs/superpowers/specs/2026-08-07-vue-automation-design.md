@@ -127,9 +127,32 @@ Ordered, because several steps fail invisibly if done out of order.
 - [ ] Point Z2M at the coordinator's serial path, start it, and read the log
       before pairing anything. Verify the coordinator firmware — MG24 sticks ship
       with varying firmware and may need flashing.
+- [x] Zigbee2MQTT 2.13.0 running. **The adapter must be set explicitly**:
+      `serial.adapter: ember` alongside the port. Without it Z2M fails with
+      "No valid USB adapter found" even though the port is correct — auto-detect
+      does not recognise this stick. Coordinator reports EmberZNet 7.4.5 [GA].
 - [ ] Pair the four bulbs, naming each by physical position rather than "Lamp 1–4".
+      2 of 4 done: `light.shelf_lamp`, `light.floor_lamp`.
+- [x] Tailscale on both ends — `homeassistant` = `100.85.128.101`,
+      `persimmon-eu` = `100.125.141.65`. `HA_BASE_URL=http://100.85.128.101`
+      (port 80, not 8123 — HA serves on 80 here).
 - [ ] **Configure HA backups before building anything on top.** Losing the NVMe
       otherwise loses the whole setup.
+
+### Gotchas hit during bring-up, recorded so they aren't rediscovered
+
+- **The Apps (formerly Add-ons) panel is missing from the UI entirely.** The
+  `hassio` component loads and the Supervisor is healthy, but no `hassio` panel
+  is registered and `/hassio/store` 404s. Known unresolved upstream issue. The
+  console `ha` CLI and the Supervisor API both still work.
+- **The Supervisor proxy (`/api/hassio/*`) rejects long-lived tokens** with 401,
+  while `/api/*` accepts them. Add-on management needs either the console, or
+  `$SUPERVISOR_TOKEN` from inside an add-on container.
+- **The `ha >` console is not a shell** — no pipes, no `grep`.
+- **Zigbee2MQTT 2.x waits on an onboarding page** and will not start the Zigbee
+  stack until it receives `POST /submit`. It re-arms this on every restart.
+- **Renaming a device in Z2M does not rename the HA entity** (`homeassistant_rename:
+  false`); the entity registry needs a separate update to get `light.<name>`.
 
 ## Zigbee stack: Zigbee2MQTT
 
