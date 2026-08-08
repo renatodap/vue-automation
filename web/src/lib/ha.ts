@@ -85,6 +85,60 @@ export async function callService(
   });
 }
 
+/**
+ * Write a persistent scene through HA's own scene-editor API.
+ *
+ * `scene.create` would be the obvious service, but the scenes it makes vanish
+ * on restart — they live in memory only. This endpoint is what the built-in
+ * scene editor posts to, so the result survives reboots and shows up in
+ * scenes.yaml like any hand-written one.
+ */
+export async function saveScene(
+  id: string,
+  name: string,
+  entities: Record<string, Record<string, unknown>>,
+): Promise<void> {
+  await haFetch(`/api/config/scene/config/${encodeURIComponent(id)}`, {
+    method: "POST",
+    body: JSON.stringify({ id, name, entities }),
+  });
+}
+
+export async function deleteScene(id: string): Promise<void> {
+  await haFetch(`/api/config/scene/config/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Snapshot what the lamps are doing right now, in the shape a scene wants.
+ *
+ * Only one colour key is written per lamp. A scene carrying both a colour
+ * temperature and a hue would let HA pick which wins, and the room would come
+ * back subtly different from the one that was saved.
+ */
+export function snapshotForScene(lamps: Lamp[]): Record<string, Record<string, unknown>> {
+  const entities: Record<string, Record<string, unknown>> = {};
+  for (const lamp of lamps) {
+    if (!lamp.reachable) continue; // Can't capture what we can't read.
+    if (!lamp.on) {
+      entities[lamp.entityId] = { state: "off" };
+      continue;
+    }
+    const entry: Record<string, unknown> = {
+      state: "on",
+      brightness: Math.round(((lamp.brightness ?? 100) / 100) * 255),
+    };
+    if (lamp.colorMode === "color_temp" && lamp.kelvin) {
+      entry.color_temp_kelvin = lamp.kelvin;
+    } else if (lamp.hs) {
+      entry.hs_color = lamp.hs;
+    }
+    entities[lamp.entityId] = entry;
+  }
+  return entities;
+}
+
 /** Cheap liveness probe used by the connection banner. */
 export async function ping(): Promise<boolean> {
   try {
@@ -122,6 +176,12 @@ export type Lamp = {
 export type Scene = {
   entityId: string;
   name: string;
+  /**
+   * HA's own scene id — the key the config API uses, distinct from the entity
+   * id. Only present on scenes created through the editor; hand-written YAML
+   * scenes without an `id:` can't be edited or deleted over the API.
+   */
+  id: string | null;
   /** ISO timestamp of when HA last applied it, or null if never this boot. */
   lastActivated: string | null;
 };
@@ -183,6 +243,7 @@ export function toScenes(states: HaState[]): Scene[] {
     .map((s) => ({
       entityId: s.entity_id,
       name: friendlyName(s, s.entity_id.replace(/^scene\./, "")),
+      id: typeof s.attributes["id"] === "string" ? s.attributes["id"] : null,
       // HA stores a scene's `state` as the timestamp it was last applied, or
       // "unknown" if it hasn't been since the last restart.
       lastActivated: s.state === "unknown" ? null : s.state,

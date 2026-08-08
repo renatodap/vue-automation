@@ -1,6 +1,7 @@
 export type SceneView = {
   entityId: string;
   name: string;
+  id: string | null;
   label: string;
   accent: string | null;
   sortOrder: number | null;

@@ -5,9 +5,11 @@ import {
   ChevronDown,
   Lightbulb,
   LightbulbOff,
+  Plus,
   Power,
   RefreshCw,
   Sun,
+  Trash2,
   WifiOff,
 } from "lucide-react";
 import { apiUrl, postJson } from "@/lib/client";
@@ -21,6 +23,9 @@ export function ScenePicker() {
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [openLamp, setOpenLamp] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [sceneName, setSceneName] = useState("");
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -128,6 +133,31 @@ export function ScenePicker() {
       },
     );
 
+  const saveCurrent = () =>
+    act(
+      "save",
+      async () => {
+        const r = await postJson<{ captured: number }>("/api/scenes", {
+          name: sceneName.trim(),
+        });
+        setSaving(false);
+        setSceneName("");
+        flash(`Saved "${sceneName.trim()}" — ${r.captured} lamps captured`);
+      },
+    );
+
+  const removeScene = (scene: SceneView) => {
+    if (!scene.id) return Promise.resolve();
+    return act(scene.entityId, async () => {
+      const response = await fetch(
+        apiUrl(`/api/scenes?id=${encodeURIComponent(scene.id!)}`),
+        { method: "DELETE" },
+      );
+      if (!response.ok) throw new Error("Couldn't delete that scene");
+      flash(`Deleted ${scene.label}`);
+    });
+  };
+
   const setAll = (patch: {
     on?: boolean;
     brightness?: number;
@@ -181,17 +211,17 @@ export function ScenePicker() {
                 </Banner>
               )}
 
-              {state.scenes.length > 0 && (
-                <Section title="Scenes">
-                  <div className="grid grid-cols-2 gap-2">
-                    {state.scenes.map((s) => (
+              <Section title="Scenes">
+                <div className="grid grid-cols-2 gap-2">
+                  {state.scenes.map((s) => (
+                    <div key={s.entityId} className="relative">
                       <button
-                        key={s.entityId}
                         onClick={() => void activate(s)}
                         disabled={pending === s.entityId}
-                        className="flex items-center gap-2 px-3 rounded-[var(--r-md)] text-left transition-all active:scale-[0.97]"
+                        className="w-full flex items-center gap-2 px-3 rounded-[var(--r-md)] text-left transition-all active:scale-[0.97]"
                         style={{
                           minHeight: 52,
+                          paddingRight: editing ? 34 : 12,
                           background: "var(--surface)",
                           border: "1px solid var(--border)",
                           boxShadow:
@@ -206,10 +236,93 @@ export function ScenePicker() {
                           {s.label}
                         </span>
                       </button>
-                    ))}
-                  </div>
-                </Section>
-              )}
+                      {/* Delete only appears in edit mode. A destructive control
+                          permanently next to the one you tap in the dark is how
+                          scenes get lost. */}
+                      {editing && s.id && (
+                        <button
+                          onClick={() => void removeScene(s)}
+                          aria-label={`Delete ${s.label}`}
+                          className="absolute top-1 right-1 rounded-[var(--r-sm)]"
+                          style={{
+                            minHeight: 28,
+                            minWidth: 28,
+                            color: "var(--negative)",
+                            background: "var(--negative-bg)",
+                          }}
+                        >
+                          <Trash2 size={13} className="mx-auto" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+
+                  {saving ? (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void saveCurrent();
+                      }}
+                      className="col-span-2 flex gap-2"
+                    >
+                      <input
+                        value={sceneName}
+                        onChange={(e) => setSceneName(e.target.value)}
+                        placeholder="Scene name"
+                        aria-label="Scene name"
+                        autoFocus
+                        style={{ minHeight: 44 }}
+                      />
+                      <button
+                        type="submit"
+                        disabled={!sceneName.trim() || pending === "save"}
+                        className="px-4 rounded-[var(--r-md)] text-[14px] font-medium shrink-0 disabled:opacity-40"
+                        style={{
+                          minHeight: 44,
+                          background: "var(--accent)",
+                          color: "var(--text-on-accent)",
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSaving(false);
+                          setSceneName("");
+                        }}
+                        className="px-3 rounded-[var(--r-md)] text-[14px] shrink-0"
+                        style={{ minHeight: 44, color: "var(--text-muted)" }}
+                      >
+                        Cancel
+                      </button>
+                    </form>
+                  ) : (
+                    <button
+                      onClick={() => setSaving(true)}
+                      className="flex items-center justify-center gap-1.5 rounded-[var(--r-md)] text-[13px] font-medium"
+                      style={{
+                        minHeight: 52,
+                        background: "transparent",
+                        border: "1px dashed var(--border-strong)",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <Plus size={15} /> Save current
+                    </button>
+                  )}
+
+                  {state.scenes.some((s) => s.id) && !saving && (
+                    <button
+                      onClick={() => setEditing((v) => !v)}
+                      className="text-[13px]"
+                      style={{ minHeight: 52, color: "var(--text-muted)" }}
+                    >
+                      {editing ? "Done" : "Edit"}
+                    </button>
+                  )}
+                </div>
+              </Section>
 
               {/* Master. This is the section that removes the most work: warming
                   or dimming the whole room used to mean opening four lamps. */}
@@ -310,6 +423,26 @@ const TEMP_GRADIENT =
 const HUE_GRADIENT =
   "linear-gradient(90deg,#ff0000 0%,#ffff00 17%,#00ff00 33%,#00ffff 50%,#0000ff 67%,#ff00ff 83%,#ff0000 100%)";
 
+/**
+ * Named white points, one tap each.
+ *
+ * Dragging a slider across ~4500 kelvin on a phone means a millimetre of thumb
+ * is a couple of hundred degrees, which is why the control felt twitchy. Almost
+ * every real adjustment is "warmer" or "cooler", not a specific number — so the
+ * presets are the primary control and the slider is the fine tune.
+ */
+const WHITE_PRESETS: { name: string; k: number }[] = [
+  { name: "Candle", k: 2200 },
+  { name: "Warm", k: 2700 },
+  { name: "Soft", k: 3000 },
+  { name: "Neutral", k: 4000 },
+  { name: "Cool", k: 5000 },
+  { name: "Daylight", k: 6200 },
+];
+
+/** Same idea for brightness — the common values without a drag. */
+const LEVELS = [10, 25, 50, 75, 100];
+
 /** One tap for the colours people actually reach for. */
 const SWATCHES: { name: string; hs: [number, number] }[] = [
   { name: "Red", hs: [0, 100] },
@@ -371,16 +504,31 @@ function Controls({
 
   return (
     <div className="flex flex-col gap-3">
-      <Slider
-        label="Intensity"
-        value={brightness}
-        min={1}
-        max={100}
-        suffix="%"
-        disabled={disabled}
-        onCommit={onBrightness}
-        ariaLabel={`${idPrefix} brightness`}
-      />
+      <div>
+        <Slider
+          label="Intensity"
+          value={brightness}
+          min={1}
+          max={100}
+          step={5}
+          suffix="%"
+          disabled={disabled}
+          onCommit={onBrightness}
+          ariaLabel={`${idPrefix} brightness`}
+        />
+        <div className="flex gap-1.5 mt-1.5">
+          {LEVELS.map((v) => (
+            <Chip
+              key={v}
+              active={Math.abs(brightness - v) < 3}
+              disabled={disabled}
+              onClick={() => onBrightness(v)}
+            >
+              {v}%
+            </Chip>
+          ))}
+        </div>
+      </div>
 
       {supportsColor && (
         <div
@@ -410,18 +558,32 @@ function Controls({
       )}
 
       {mode === "white" || !supportsColor ? (
-        <Slider
-          label="Temperature"
-          value={kelvin}
-          min={minKelvin}
-          max={maxKelvin}
-          step={50}
-          suffix="K"
-          disabled={disabled}
-          trackImage={TEMP_GRADIENT}
-          onCommit={onKelvin}
-          ariaLabel={`${idPrefix} colour temperature`}
-        />
+        <div>
+          <Slider
+            label="Temperature"
+            value={kelvin}
+            min={minKelvin}
+            max={maxKelvin}
+            step={100}
+            suffix="K"
+            disabled={disabled}
+            trackImage={TEMP_GRADIENT}
+            onCommit={onKelvin}
+            ariaLabel={`${idPrefix} colour temperature`}
+          />
+          <div className="flex gap-1.5 mt-1.5 flex-wrap">
+            {WHITE_PRESETS.filter((p) => p.k >= minKelvin && p.k <= maxKelvin).map((p) => (
+              <Chip
+                key={p.name}
+                active={Math.abs(kelvin - p.k) < 120}
+                disabled={disabled}
+                onClick={() => onKelvin(p.k)}
+              >
+                {p.name}
+              </Chip>
+            ))}
+          </div>
+        </div>
       ) : (
         <>
           <div className="flex gap-1.5 flex-wrap">
@@ -451,6 +613,7 @@ function Controls({
             value={hue}
             min={0}
             max={360}
+            step={5}
             suffix="°"
             disabled={disabled}
             trackImage={HUE_GRADIENT}
@@ -462,6 +625,7 @@ function Controls({
             value={sat}
             min={0}
             max={100}
+            step={5}
             suffix="%"
             disabled={disabled}
             trackImage={`linear-gradient(90deg,#ffffff 0%,${hsToCss([hue, 100])} 100%)`}
@@ -665,6 +829,35 @@ function Slider({
         }}
       />
     </label>
+  );
+}
+
+function Chip({
+  children,
+  active,
+  disabled,
+  onClick,
+}: {
+  children: React.ReactNode;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="flex-1 rounded-[var(--r-pill)] text-[12px] font-medium transition-colors active:scale-95"
+      style={{
+        minHeight: 30,
+        padding: "0 8px",
+        background: active ? "var(--accent-subtle)" : "var(--surface-sunken)",
+        color: active ? "var(--accent)" : "var(--text-muted)",
+        border: `1px solid ${active ? "var(--accent-border)" : "transparent"}`,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
