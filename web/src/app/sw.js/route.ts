@@ -14,13 +14,19 @@ export async function GET() {
   const base = process.env.NEXT_PUBLIC_BASE_PATH || "";
   // Bump to invalidate every client's precache. A stale precache is the bug
   // where one user is on last month's UI and nobody can reproduce it.
-  const version = "v1";
+  //
+  // v2: v1 precached BASE + '/', which at the time redirected to /login — so
+  // devices cached the login page as the app shell and kept rendering it after
+  // the passphrase gate was removed. Navigations now cache themselves at
+  // runtime instead, so the fallback can never be a redirect target.
+  const version = "v2";
 
   const body = `
 const CACHE = 'vue-lights-${version}';
 const BASE = ${JSON.stringify(base)};
+// Static assets only. Never precache a URL the server may redirect — the
+// entry either fails to store or stores the wrong page, silently.
 const SHELL = [
-  BASE + '/',
   BASE + '/icon-192.png',
   BASE + '/icon-512.png',
   BASE + '/apple-touch-icon.png',
@@ -56,12 +62,21 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigations: network first, cached shell only as an offline fallback, so
-  // the app opens to a real screen on a dead connection instead of a browser
-  // error page.
+  // Navigations: always network first, and cache the RESULT as the offline
+  // fallback. Storing what the server actually served (rather than precaching
+  // a guessed URL) means the fallback tracks the live app instead of freezing
+  // whatever the page happened to be on install day.
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request).catch(() => caches.match(BASE + '/').then((r) => r || Response.error()))
+      fetch(request)
+        .then((response) => {
+          if (response.ok && !response.redirected) {
+            const copy = response.clone();
+            caches.open(CACHE).then((c) => c.put(BASE + '/offline', copy)).catch(() => {});
+          }
+          return response;
+        })
+        .catch(() => caches.match(BASE + '/offline').then((r) => r || Response.error()))
     );
     return;
   }
