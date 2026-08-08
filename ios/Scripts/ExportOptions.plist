@@ -25,9 +25,15 @@
 	<key>compileBitcode</key>
 	<false/>
 
-	<!-- Thinning is for local installs. An App Store upload must carry every
-	     variant, or the store has nothing to thin FROM. -->
+	<!-- `export`, NOT `upload`.
+	     `upload` makes exportArchive ship the build ITSELF and write no .ipa at
+	     all. It works — the build really does reach App Store Connect — and then
+	     the next line of release.sh cannot find a file to validate, so the script
+	     exits non-zero having already succeeded. A green upload reported as a
+	     failed release is the worst of both, and in CI it would retry an upload
+	     Apple has already accepted and fail on the duplicate build number.
+	     `export` writes the .ipa; altool validates and uploads it. -->
 	<key>destination</key>
-	<string>upload</string>
+	<string>export</string>
 </dict>
 </plist>
