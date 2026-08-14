@@ -154,6 +154,68 @@ Ordered, because several steps fail invisibly if done out of order.
 - **Renaming a device in Z2M does not rename the HA entity** (`homeassistant_rename:
   false`); the entity registry needs a separate update to get `light.<name>`.
 
+### Wi-Fi gotchas, 2026-08-14 — an evening lost to each of these
+
+Recorded from a real debugging session, not from documentation. Both of these
+present as the *same* symptom, which is the whole problem.
+
+- **`ha network update --wifi-ssid` is case-sensitive, and a wrong SSID fails
+  with the exact same error as a wrong password.** The console reports
+  `Activating connection failed, check connection settings.` for *both* "network
+  not found" and "auth rejected" — the message does not discriminate, so it tells
+  you nothing about which half is wrong. A real incident here: `"Dap's Home"` was
+  entered for a network actually named `"DAP's Home"`, and the resulting hours
+  were spent re-checking the password. **Read the SSID off a device that is
+  already connected, character by character, before touching the password.**
+  (The same generic message is
+  [supervisor#4166](https://github.com/home-assistant/supervisor/issues/4166).)
+
+- **Home Assistant's CLI cannot join a WPA3-only network — the radio can, the
+  CLI can't ask.** HA OS enabled WPA3-SAE in `wpa_supplicant` in
+  [11.3](https://github.com/home-assistant/operating-system/releases/tag/11.3)
+  ("Enable WPA3 support in wpa_supplicant to support WPA3-SAE"), but the
+  Supervisor's `AuthMethod` enum still accepts only `open`, `wep` and `wpa-psk`
+  ([`supervisor/host/const.py`](https://github.com/home-assistant/supervisor/blob/main/supervisor/host/const.py)),
+  so `ha network update --wifi-auth` has no way to say `sae`. NetworkManager is
+  handed `key_mgmt` = `WPA-PSK WPA-PSK-SHA256 FT-PSK`, association fails, and it
+  times out with **`ssid-not-found`** — which reads exactly like the typo above.
+  This is [supervisor#5348](https://github.com/home-assistant/supervisor/issues/5348),
+  opened 2024-10-11 and **closed as not planned**: it is a permanent property to
+  design around, not a bug to wait out.
+
+  Two workarounds, in order of effort:
+  1. **Set the router to WPA2/WPA3 transitional mode.** The AP then offers
+     WPA2-PSK alongside SAE and `wpa-psk` associates normally.
+  2. **Import a NetworkManager keyfile with `key-mgmt=sae`** — write it to
+     `CONFIG/network/my-network` on a USB stick labelled `CONFIG` (all caps,
+     **Unix LF line endings**), insert it, and run **`ha os import`** (or reboot;
+     the stick is read at startup). The stick can be removed afterwards.
+     ([HAOS configuration](https://developers.home-assistant.io/docs/operating-system/configuration/))
+
+  **Do not conclude "WPA3-only" from what a Mac reports.** 6 GHz mandates WPA3 by
+  spec — WPA2 is not permitted on that band at all — so a Mac showing
+  "WPA3 Personal" while associated on a 6 GHz channel says *nothing* about the
+  2.4/5 GHz bands, and the Pi's onboard radio only uses those. Check the router's
+  per-band security settings, not the client's status line.
+
+### The recovery path, when the home Wi-Fi is the broken thing
+
+**The Pi needs *internet*, not the home network.** The app reaches Home Assistant
+over Tailscale (`HA_BASE_URL=http://100.85.128.101`), never over the apartment
+LAN — see "Why Tailscale, and why the browser never talks to HA" above. Nothing
+in the path from phone → Persimmon → Pi depends on which network the Pi is on, or
+on the phone and the Pi being on the same one.
+
+So **a phone hotspot is a complete disaster-recovery path.** Point the Pi at a
+hotspot — with `ha network update`, or by moving the USB `CONFIG` stick to it —
+and Tailscale re-establishes, the PWA works from anywhere in the world, and the
+lights come back on while the router is still broken. The apartment's Wi-Fi is a
+convenience, not a dependency.
+
+This was not designed as a recovery feature. It falls out of hosting the UI
+off-site, which the "Tradeoff accepted" note below treats as a *cost*. On the
+evening the router broke, it was the thing that worked.
+
 ## Zigbee stack: Zigbee2MQTT
 
 Chosen over ZHA. Both support an EFR32MG24 coordinator, but Z2M gives readable
