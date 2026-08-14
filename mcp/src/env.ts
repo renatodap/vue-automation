@@ -34,7 +34,18 @@ export const mcpPassphrase = () =>
  * owns its database. `registry.json` records no database for this service, so
  * `infra db *` must never target it.
  */
-export const databaseUrl = () => process.env.DATABASE_URL || "";
+export const databaseUrl = () => {
+  const raw = process.env.DATABASE_URL || "";
+  // Strip the query string. The app's own URL carries Prisma's `?schema=public`,
+  // and postgres.js forwards unknown query params to the server as connection
+  // options — where `schema` is not a GUC, so the connection dies with a FATAL
+  // `unrecognized configuration parameter "schema"` and every OAuth call answers
+  // temporarily_unavailable. Copying that value across is the obvious thing to
+  // do, so tolerate it here rather than relying on whoever sets the env var
+  // remembering; homeassistant/README.md strips it the same way for psql.
+  const q = raw.indexOf("?");
+  return q === -1 ? raw : raw.slice(0, q);
+};
 
 /**
  * Home Assistant, direct, over the tailnet — used for exactly ONE thing.
