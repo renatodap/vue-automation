@@ -337,9 +337,37 @@ a write is safe.
 
 ## 6. Device discovery via Zigbee2MQTT
 
-The payoff that justifies the connector reaching Mosquitto at all: **"Claude, I'm
-putting a new bulb in the corner lamp"** — permit joins, watch the interview,
-name the thing, done, without opening a single admin UI.
+The payoff: **"Claude, I'm putting a new bulb in the corner lamp"** — permit
+joins, watch the interview, name the thing, done, without opening a single admin
+UI.
+
+> **Amended 2026-08-14, after the first deploy.** This section originally had the
+> connector holding its own MQTT connection to Mosquitto. It does not, because it
+> cannot: the broker answered `Connection refused: Not authorized`, and its
+> credentials are **unobtainable from here**. They live in the add-on
+> configuration behind the Supervisor, and `/api/hassio/*` rejects a long-lived
+> token — verified, `401`, with a token that `config/auth/list` confirms is
+> admin. Home Assistant does not expose config-entry `data` over any API either.
+>
+> **Home Assistant is the bridge instead**, because it is already authenticated to
+> that broker. `permit_join` and the Z2M half of a rename publish through the
+> `mqtt.publish` service; the device list and the pairing signal come from HA's
+> device registry, since a device completing its Zigbee interview *is* a new
+> registry entry. All of it verified live: `mqtt.publish` drove a real device
+> rename, and the registry resolved IEEE addresses to Z2M friendly names.
+>
+> A direct broker connection survives as **optional enrichment** — live
+> `bridge/event` interview progress if credentials ever exist — never as a
+> dependency. Two distinctions this forces into the tool surface: `null` is not
+> `false` (`interview_completed` is unknown, not negative, when the broker is
+> unreadable, and `bridge_events: null` "not listening" differs from `[]`
+> "watched, saw nothing"), and **unconfirmed is not failed** — a publish through
+> HA has no return channel, so a request is reported as sent-but-unconfirmed
+> rather than as an error.
+>
+> The topic reference below is still correct and still the authority on payload
+> shapes; only the transport changed. The rename trap that follows is unaffected
+> and remains the reason `name_device` exists at all.
 
 Z2M's bridge API is MQTT topics under `zigbee2mqtt/bridge/`
 ([MQTT topics and messages](https://www.zigbee2mqtt.io/guide/usage/mqtt_topics_and_messages.html)):
