@@ -49,7 +49,10 @@ export function InstallHint() {
     <div
       className="fixed left-0 right-0 flex items-center gap-2.5 mx-auto text-[13px]"
       style={{
-        bottom: `calc(max(14px, env(safe-area-inset-bottom)) + 58px)`,
+        // Clears the tab bar, which is taller than the single line of text this
+        // row used to hold. Same max() fallback as the footer itself: the raw
+        // inset is 0px on a device without one.
+        bottom: `calc(max(14px, env(safe-area-inset-bottom)) + 66px)`,
         maxWidth: "min(560px, calc(100vw - 32px))",
         background: "var(--elevated)",
         border: "1px solid var(--border-strong)",

@@ -11,6 +11,17 @@ export function apiUrl(path: string): string {
   return `${base}${path}`;
 }
 
+/**
+ * Same prefixing for static files in public/.
+ *
+ * Next rewrites the src of its own <Image> and of imported assets, but a plain
+ * <img src="/room-plate-dark.png"> is left alone and 404s on a path-mounted
+ * deploy — the identical failure as a raw fetch("/api/...").
+ */
+export function assetUrl(path: string): string {
+  return apiUrl(path);
+}
+
 export async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(apiUrl(path), {
     method: "POST",

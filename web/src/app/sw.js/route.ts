@@ -19,7 +19,11 @@ export async function GET() {
   // devices cached the login page as the app shell and kept rendering it after
   // the passphrase gate was removed. Navigations now cache themselves at
   // runtime instead, so the fallback can never be a redirect target.
-  const version = "v2";
+  //
+  // v3: the room plate joined the precache. It is a static picture of the
+  // furniture with no lamp, no fixture and no glow in it — every state-bearing
+  // pixel is drawn live on top — so caching it can never show a stale light.
+  const version = "v3";
 
   const body = `
 const CACHE = 'vue-lights-${version}';
@@ -30,6 +34,9 @@ const SHELL = [
   BASE + '/icon-192.png',
   BASE + '/icon-512.png',
   BASE + '/apple-touch-icon.png',
+  // The room map's background. Shell, not data: no light state is baked into
+  // it, and the Room tab is the app's front door.
+  BASE + '/room-plate-dark.png',
 ];
 
 self.addEventListener('install', (event) => {

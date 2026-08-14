@@ -1,8 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
-import { callService, deleteAutomation, saveAutomation } from "@/lib/ha";
+import {
+  callService,
+  deleteAutomation,
+  getStates,
+  saveAutomation,
+  toAutomations,
+} from "@/lib/ha";
 import { errorResponse } from "../state/route";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * The schedule list, on its own endpoint.
+ *
+ * Separate from /api/state deliberately, and it is the one split that pays for
+ * itself: light state is polled every few seconds because a lamp can change
+ * under you, while a schedule only changes when somebody changes it. Polling
+ * automations at the same cadence would be pure tailnet traffic answering a
+ * question nobody asked.
+ */
+export async function GET() {
+  try {
+    return NextResponse.json({ ok: true, automations: toAutomations(await getStates()) });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
 
 /**
  * Schedules, expressed in the two shapes a lighting setup actually needs:

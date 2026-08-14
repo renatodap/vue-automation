@@ -186,12 +186,143 @@ body {
   /* Without the max() fallback this is 0px on a device with no inset, and the
      row sits flush against the screen edge. */
   padding-bottom: max(14px, env(safe-area-inset-bottom));
-  padding-top: 10px;
-  padding-inline: max(var(--page-pad), env(safe-area-inset-left));
+  padding-top: 6px;
+  padding-inline: max(12px, env(safe-area-inset-left));
   border-top: 1px solid var(--border);
   background: var(--surface-sunken);
   user-select: none;
   -webkit-user-select: none;
+  /* Anchors the notice toast to this ROW rather than to the viewport. A fixed
+     toast would be moved independently by iOS and would sit over the keyboard;
+     this one rides with the shell. */
+  position: relative;
+}
+
+/* ============================ TAB BAR ============================
+   The third grid row, filled. Not fixed, not an overlay: the shell has always
+   been `auto 1fr auto`, and this is what the last row is for.
+================================================================= */
+.tabbar {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+}
+
+.tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  /* Comfortably past the 44px minimum target, including the label. */
+  min-height: 48px;
+  padding: 4px 2px;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  /* A LABEL, not an input: the ≥16px rule exists because iOS zooms when an
+     input under 16px takes focus, and a link never takes focus that way. */
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.1;
+  text-decoration: none;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+/* The tap highlight above is only safe to remove because this exists. */
+.tab:active {
+  transform: scale(0.94);
+  background: var(--accent-subtle);
+}
+
+.tab[data-active] {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+
+/* Transient things that belong at the thumb: the notice, and the offer to undo
+   whatever just happened. Stacked above the nav, anchored to the footer ROW. */
+.floats {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-inline: 12px;
+  /* The container never eats a tap; its children opt back in. */
+  pointer-events: none;
+}
+
+.notice {
+  max-width: min(92vw, 520px);
+  padding: 7px 14px;
+  border-radius: var(--r-pill);
+  background: var(--elevated);
+  border: 1px solid var(--accent-border);
+  box-shadow: var(--shadow-md);
+  color: var(--accent);
+  font-size: 13px;
+  text-align: center;
+  animation: float-in var(--dur-base) var(--ease-out);
+}
+
+.undo {
+  display: flex;
+  align-items: center;
+  max-width: min(92vw, 520px);
+  border-radius: var(--r-pill);
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  pointer-events: auto;
+  animation: float-in var(--dur-base) var(--ease-out);
+}
+
+.undo-action {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 0 12px 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.undo-action:active {
+  background: var(--accent-subtle);
+}
+
+.undo-dismiss {
+  min-height: 44px;
+  min-width: 40px;
+  padding-right: 6px;
+  color: var(--text-muted);
+}
+
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ============================ CONTROLS ============================ */
@@ -289,6 +420,197 @@ button:focus-visible {
   background: var(--surface);
   border: 2px solid var(--text-primary);
   box-shadow: var(--shadow-sm);
+}
+
+/* ============================ ROOM MAP ============================
+   The map fills the middle row and does not scroll — the whole point is seeing
+   the room at once. It is the row that shrinks when the strip below grows, so
+   opening a lamp's controls never pushes anything off the bottom.
+================================================================= */
+.room-page {
+  /* 100% of main's CONTENT box, so main's own padding-bottom is not added on
+     top and the page does not gain a 16px scroll it never needed. */
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.room-stage {
+  flex: 1 1 auto;
+  /* Without this a flex item refuses to shrink below its content and the strip
+     underneath gets pushed out of the shell. */
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  /* Lets the plate below size itself against BOTH of this box's axes. Fitting
+     an image by hand — CSS max-width plus max-height — silently breaks the
+     aspect ratio on one axis, and a lamp then sits next to the furniture it is
+     supposed to be sitting on. Off by a little is worse than off by a lot,
+     because it reads as the map being roughly right. */
+  container-type: size;
+}
+
+.room-plate {
+  position: relative;
+  align-self: center;
+  /* The exact letterbox/pillarbox fit, in one expression. */
+  width: min(100cqw, calc(100cqh * 896 / 1200));
+  aspect-ratio: 896 / 1200;
+  border-radius: var(--r-lg);
+  /* Visible before the image lands, and if it never lands the markers still
+     sit in the right places on an empty floor. */
+  background: var(--surface-sunken);
+}
+
+.room-plate > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The box already carries the plate's exact ratio, so fill is contain
+     without the sub-pixel letterbox that would shift every marker. */
+  object-fit: fill;
+  border-radius: var(--r-lg);
+  opacity: 0.92;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.lamp-marker {
+  position: absolute;
+  /* Positioned by its centre: the coordinates are where the lamp IS. */
+  transform: translate(-50%, -50%);
+  width: 56px;
+  height: 56px;
+  min-height: 0;
+  padding: 0;
+  /* A 26px dot is not a 44px target. The hit area is invisible and large. */
+  /* `none`, not `manipulation`: a vertical drag on a lamp is a brightness
+     scrub, and the browser would otherwise claim it as a scroll. Safe here
+     because the map itself never scrolls — main does, and main is elsewhere. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+/* Lifted, and looking for somewhere to land. */
+.lamp-marker[data-carrying] {
+  transform: translate(-50%, -50%) scale(1.18);
+  z-index: 3;
+}
+
+/* Everything else while a lamp is in the air, or while the eyedropper is
+   armed: a drop target has to be visible before the thumb is over it, or the
+   gesture is a guess. */
+.lamp-marker[data-target] .lamp-dot {
+  outline: 2px dashed var(--accent-border);
+  outline-offset: 5px;
+  animation: target-pulse 1.4s ease-in-out infinite;
+}
+
+.lamp-marker[data-hovered] {
+  transform: translate(-50%, -50%) scale(1.14);
+}
+
+.lamp-marker[data-hovered] .lamp-dot {
+  outline: 3px solid var(--accent);
+  outline-offset: 6px;
+  animation: none;
+}
+
+/* It took. Confirmation the eye can catch without reading the notice. */
+.lamp-marker[data-flashing] .lamp-dot {
+  animation: took 0.7s var(--ease-out);
+}
+
+@keyframes target-pulse {
+  50% {
+    outline-color: var(--accent);
+  }
+}
+
+@keyframes took {
+  0% {
+    box-shadow: 0 0 0 0 var(--accent);
+  }
+  70% {
+    box-shadow: 0 0 0 22px rgba(232, 165, 77, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(232, 165, 77, 0);
+  }
+}
+
+.lamp-glow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  transition:
+    width var(--dur-slow) var(--ease-out),
+    height var(--dur-slow) var(--ease-out);
+}
+
+.lamp-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  border-width: 2px;
+  transition:
+    background var(--dur-base) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.lamp-marker:active .lamp-dot {
+  transform: scale(0.86);
+}
+
+.lamp-marker[data-selected] .lamp-dot {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.lamp-marker:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -4px;
+  border-radius: var(--r-md);
+}
+
+.lamp-label {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 16px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  color: var(--text-primary);
+  background: rgba(16, 14, 11, 0.62);
+  pointer-events: none;
+}
+
+[data-theme="light"] .lamp-label,
+.light .lamp-label {
+  color: #f5f1e8;
+}
+
+.room-strip {
+  flex: 0 0 auto;
+  padding: 10px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
 }
 
 @media (prefers-reduced-motion: reduce) {

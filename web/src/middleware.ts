@@ -17,6 +17,11 @@ import { SESSION_COOKIE, verifySession } from "@/lib/auth";
 const PUBLIC_PREFIXES = [
   "/login",
   "/api/login",
+  // Machine-to-machine routes. Public only in the sense that the session cookie
+  // does not apply to them — they carry their own bearer secret and must check
+  // it themselves, because nothing upstream of them does. A browser session can
+  // never reach them, and they must never be handed a cookie-authenticated pass.
+  "/api/internal",
   "/_next",
   "/manifest.webmanifest",
   "/sw.js",

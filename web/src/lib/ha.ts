@@ -211,6 +211,10 @@ export type Lamp = {
   supportsColor: boolean;
   /** "color_temp" | "xy" | "hs" | … — what the bulb is doing right now. */
   colorMode: string | null;
+  /** Effects the bulb itself advertises — blink, breathe, colorloop, … */
+  effects: string[];
+  /** The effect it is running, null when idle. HA spells idle as "None". */
+  effect: string | null;
 };
 
 export type Scene = {
@@ -250,6 +254,8 @@ export function toLamps(states: HaState[]): Lamp[] {
       const hsRaw = s.attributes["hs_color"];
       const modes = s.attributes["supported_color_modes"];
       const colorMode = s.attributes["color_mode"];
+      const effectList = s.attributes["effect_list"];
+      const effect = s.attributes["effect"];
 
       return {
         entityId: s.entity_id,
@@ -272,9 +278,152 @@ export function toLamps(states: HaState[]): Lamp[] {
           ? modes.some((m) => m === "xy" || m === "hs" || m === "rgb" || m === "rgbw" || m === "rgbww")
           : false,
         colorMode: typeof colorMode === "string" ? colorMode : null,
+        effects: Array.isArray(effectList)
+          ? effectList.filter((e): e is string => typeof e === "string")
+          : [],
+        // "None" is HA's word for "no effect running". Passing it through as a
+        // running effect would light up an Off chip as if it were an effect.
+        effect: typeof effect === "string" && effect !== "None" ? effect : null,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ------------------------------------------------------------------ commands
+
+export type LightPatch = {
+  entityId: string;
+  on?: boolean;
+  /** 0–100. */
+  brightness?: number;
+  kelvin?: number;
+  /** [hue 0–360, saturation 0–100]. */
+  hs?: [number, number];
+  effect?: string;
+};
+
+export type LampRange = { minKelvin: number; maxKelvin: number };
+
+const RANGE_TTL_MS = 5 * 60_000;
+let rangeCache: { at: number; ranges: Map<string, LampRange> } | null = null;
+
+/**
+ * Each bulb's own tunable envelope, cached for a few minutes.
+ *
+ * This is CAPABILITY, not state, and the difference is the whole reason caching
+ * it is allowed: min/max kelvin are burned into the bulb and do not change
+ * while it is on the mesh, whereas what the lamp is DOING must never be served
+ * from a cache. Worth caching because the alternative is a full /api/states
+ * read on the hot path of every slider release, purely to clamp one number.
+ *
+ * Never throws: if the read fails we fall back to the last known ranges, or to
+ * none at all, and the physical envelope below is what keeps the command sane.
+ */
+export async function lampRanges(): Promise<Map<string, LampRange>> {
+  if (rangeCache && Date.now() - rangeCache.at < RANGE_TTL_MS) return rangeCache.ranges;
+  try {
+    const ranges = new Map(
+      toLamps(await getStates()).map((l) => [
+        l.entityId,
+        { minKelvin: l.minKelvin, maxKelvin: l.maxKelvin },
+      ]),
+    );
+    rangeCache = { at: Date.now(), ranges };
+    return ranges;
+  } catch {
+    return rangeCache?.ranges ?? new Map();
+  }
+}
+
+/**
+ * The widest envelope any lighting bulb has. Only used when the bulb's own
+ * range is unknown — clamping to a hardcoded 2700–6500 would be a lie about a
+ * bulb that reports 2000–6493, and a value outside a bulb's real range is
+ * rejected silently: the lamp simply doesn't move, which reads as a dead tap.
+ */
+const PHYSICAL_MIN_K = 1500;
+const PHYSICAL_MAX_K = 10_000;
+
+/** The service call one patch turns into, clamped to what that bulb can do. */
+export function lightCommand(
+  patch: LightPatch,
+  range: LampRange | undefined,
+): { service: "turn_on" | "turn_off"; data: Record<string, unknown> } {
+  if (patch.on === false) return { service: "turn_off", data: {} };
+
+  const data: Record<string, unknown> = {};
+  if (patch.brightness !== undefined) {
+    // Clamp before converting: HA silently rejects out-of-range values and the
+    // lamp just doesn't change, which looks like the tap didn't register.
+    data.brightness_pct = Math.max(1, Math.min(100, Math.round(patch.brightness)));
+  }
+  // Colour temperature and hue are mutually exclusive modes on the bulb.
+  // Sending both lets HA pick, and which one wins is not something the user can
+  // predict — so hue wins explicitly when it was asked for.
+  if (patch.hs !== undefined) {
+    data.hs_color = [
+      ((Math.round(patch.hs[0]) % 360) + 360) % 360,
+      Math.max(0, Math.min(100, Math.round(patch.hs[1]))),
+    ];
+  } else if (patch.kelvin !== undefined) {
+    const min = range?.minKelvin ?? PHYSICAL_MIN_K;
+    const max = range?.maxKelvin ?? PHYSICAL_MAX_K;
+    data.color_temp_kelvin = Math.max(min, Math.min(max, Math.round(patch.kelvin)));
+  }
+  if (patch.effect !== undefined) data.effect = patch.effect;
+  return { service: "turn_on", data };
+}
+
+/**
+ * Apply a batch of per-lamp patches in as few service calls as possible.
+ *
+ * Grouping matters over a tailnet: four sequential round trips are visibly
+ * staggered and the lamps change one at a time, like a wave. Patches that
+ * resolve to the same payload — which is every "match all to this" and most
+ * undos — collapse into a single call carrying a list of entity ids.
+ */
+export async function applyLightPatches(
+  patches: LightPatch[],
+  ranges: Map<string, LampRange>,
+): Promise<void> {
+  const groups = new Map<string, { service: string; data: Record<string, unknown>; ids: string[] }>();
+
+  for (const patch of patches) {
+    const { service, data } = lightCommand(patch, ranges.get(patch.entityId));
+    const key = `${service}:${JSON.stringify(data)}`;
+    const existing = groups.get(key);
+    if (existing) existing.ids.push(patch.entityId);
+    else groups.set(key, { service, data, ids: [patch.entityId] });
+  }
+
+  const calls = [...groups.values()].map((g) =>
+    callService("light", g.service, {
+      ...g.data,
+      entity_id: g.ids.length === 1 ? g.ids[0] : g.ids,
+    }),
+  );
+
+  // One failing group must not hide the others, but the caller still has to
+  // hear that something failed.
+  const results = await Promise.allSettled(calls);
+  const failed = results.find((r) => r.status === "rejected");
+  if (failed && failed.status === "rejected") throw failed.reason;
+}
+
+/**
+ * What one lamp is doing, as the patch that would reproduce it.
+ *
+ * The single-colour-key rule from snapshotForScene applies here too, and for
+ * the same reason: a payload carrying both a colour temperature and a hue lets
+ * Home Assistant decide which wins, and the room comes back subtly wrong.
+ */
+export function patchFromLamp(lamp: Lamp, entityId: string): LightPatch {
+  if (!lamp.on) return { entityId, on: false };
+  const patch: LightPatch = { entityId, on: true, brightness: lamp.brightness ?? 100 };
+  if (lamp.colorMode === "color_temp" && lamp.kelvin) patch.kelvin = lamp.kelvin;
+  else if (lamp.hs) patch.hs = lamp.hs;
+  else if (lamp.kelvin) patch.kelvin = lamp.kelvin;
+  return patch;
 }
 
 export function toScenes(states: HaState[]): Scene[] {
