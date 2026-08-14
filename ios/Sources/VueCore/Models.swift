@@ -48,6 +48,27 @@ public struct Lamp: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+extension Lamp {
+    /// Why this lamp is not answering, in words rather than in grey.
+    ///
+    /// A Zigbee bulb that has been switched off at the lamp or at the wall is
+    /// simply gone from the mesh — there is no "off" state to report, because
+    /// nothing is listening. It is by far the most common non-normal state in
+    /// this room, and rendering it as a dimmed row with no explanation makes it
+    /// look like the app failed rather than like the lamp is unplugged.
+    public var trouble: String? {
+        reachable ? nil : "No power at \(name) — it's switched off at the lamp or the wall"
+    }
+
+    /// The short version, for a row subtitle.
+    public var statusLine: String {
+        guard reachable else { return "No power — switched off at the lamp" }
+        guard on else { return "Off" }
+        let colour = kelvin.map { "\($0)K" } ?? (hs != nil ? "colour" : "—")
+        return "\(brightness ?? 100)% · \(colour)"
+    }
+}
+
 public struct LightScene: Codable, Sendable, Hashable, Identifiable {
     public let entityId: String
     public let name: String

@@ -3,6 +3,10 @@ import Foundation
 import VueCore
 import VueRepositories
 
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
+
 // MARK: - The entity
 
 /// A scene, as Siri and Shortcuts see it.
@@ -46,6 +50,16 @@ public struct SceneEntity: AppEntity, Identifiable, Sendable {
     }
 
     public static let defaultQuery = SceneEntityQuery()
+
+    /// What a Control Center control shows before anybody has configured it.
+    ///
+    /// It has an empty id on purpose, and `ActivateSceneIntent` refuses to run
+    /// against one. A control that silently does nothing is worse than a control
+    /// that says what it needs.
+    public static let unconfigured = SceneEntity(
+        id: "", label: "Pick a scene", aliases: [], symbol: "lightbulb")
+
+    public var isConfigured: Bool { !id.isEmpty }
 }
 
 /// Resolves scenes for Siri, Spotlight and Shortcuts.
@@ -91,14 +105,44 @@ public struct SceneEntityQuery: EntityQuery, EntityStringQuery, Sendable {
 
 // MARK: - Shared plumbing
 
-enum IntentRuntime {
+public enum IntentRuntime {
     /// The client an intent uses. Built per call rather than held: an intent can
     /// run in a process that lives for one second, and a cached actor buys
     /// nothing there.
-    static func client() -> APIClient {
-        let stored = UserDefaults.standard.string(forKey: "vue.baseURL")
-        let url = stored.flatMap(URL.init(string:)) ?? VueAPI.defaultBaseURL
-        return APIClient(baseURL: url, token: UserDefaults.standard.string(forKey: "vue.token"))
+    ///
+    /// The settings come from the **shared** defaults suite, not from
+    /// `UserDefaults.standard`. An intent fired from a widget button or a
+    /// Control Center control runs inside the widget extension, which has its
+    /// own `standard` suite — reading from there would find no custom server URL
+    /// and no token, and the failure would look like the server being down.
+    public static func client(timeout: TimeInterval = 12) -> APIClient {
+        let url = VueSettings.baseURL.flatMap(URL.init(string:)) ?? VueAPI.defaultBaseURL
+        return APIClient(baseURL: url, token: VueSettings.token, timeout: timeout)
+    }
+
+    /// The room just changed and we did not read what it changed to.
+    ///
+    /// Drops the cached reading rather than leaving the old one in place. The
+    /// widget then prints no status line at all until the app next refreshes,
+    /// which is the honest answer — invariant #3 is about never showing a stale
+    /// reading as current, and "we just fired a scene" is precisely when the
+    /// cached one is guaranteed wrong.
+    static func invalidateRoomCache() {
+        if let last = RoomSnapshotStore.load() {
+            RoomSnapshotStore.save(RoomSnapshot(
+                lampsOn: last.lampsOn, lampsTotal: last.lampsTotal,
+                unreachable: last.unreachable, averageBrightness: last.averageBrightness,
+                capturedAt: .distantPast))
+        }
+        reloadSurfaces()
+    }
+
+    /// Redraw the widget and the controls.
+    public static func reloadSurfaces() {
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadAllControls()
+        #endif
     }
 }
 
@@ -125,6 +169,13 @@ public struct ActivateSceneIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
+        // A Control Center control that has never been configured, or a widget
+        // button for a scene that has since been deleted. Both are reachable by
+        // a real tap, and both must say so rather than appear to work.
+        guard scene.isConfigured else {
+            return .result(dialog: "Choose a scene for that button first.")
+        }
+
         let result: SceneResult
         do {
             result = try await IntentRuntime.client().activate(scene: scene.id)
@@ -134,6 +185,10 @@ public struct ActivateSceneIntent: AppIntent {
             // about whether the lights changed.
             return .result(dialog: IntentDialog(stringLiteral: error.errorDescription ?? "That didn't work."))
         }
+
+        // The room is now something we have not read. Drop the cached reading
+        // rather than let a widget keep printing the old one.
+        IntentRuntime.invalidateRoomCache()
 
         // Report partial application. Home Assistant applies a scene to what it
         // can reach and says nothing about the rest, and silence reads as
@@ -163,6 +218,11 @@ public struct AllLightsOffIntent: AppIntent {
             let targets = state.lit.map(\.entityId)
             guard !targets.isEmpty else { return .result(dialog: "They're already off.") }
             try await client.setLights(targets, on: false)
+            RoomSnapshotStore.save(RoomSnapshot(
+                lampsOn: 0, lampsTotal: state.lamps.count,
+                unreachable: state.lamps.count - state.reachable.count,
+                averageBrightness: 0))
+            IntentRuntime.reloadSurfaces()
             return .result(dialog: "Lights off.")
         } catch let error as VueError {
             return .result(dialog: IntentDialog(stringLiteral: error.errorDescription ?? "That didn't work."))
@@ -186,6 +246,11 @@ public struct AllLightsOnIntent: AppIntent {
             guard !targets.isEmpty else { return .result(dialog: "I can't reach any lamps.") }
             // Hold the room's current level rather than blasting to 100%.
             try await client.setLights(targets, on: true, brightness: state.averageBrightness)
+            RoomSnapshotStore.save(RoomSnapshot(
+                lampsOn: targets.count, lampsTotal: state.lamps.count,
+                unreachable: state.lamps.count - targets.count,
+                averageBrightness: state.averageBrightness))
+            IntentRuntime.reloadSurfaces()
             return .result(dialog: "Lights on.")
         } catch let error as VueError {
             return .result(dialog: IntentDialog(stringLiteral: error.errorDescription ?? "That didn't work."))
@@ -246,6 +311,11 @@ public struct SetBrightnessIntent: AppIntent {
             let targets = state.reachable.map(\.entityId)
             guard !targets.isEmpty else { return .result(dialog: "I can't reach any lamps.") }
             try await client.setLights(targets, on: true, brightness: level.percent)
+            RoomSnapshotStore.save(RoomSnapshot(
+                lampsOn: targets.count, lampsTotal: state.lamps.count,
+                unreachable: state.lamps.count - targets.count,
+                averageBrightness: level.percent))
+            IntentRuntime.reloadSurfaces()
             return .result(dialog: IntentDialog(stringLiteral: "Set to \(level.percent)%."))
         } catch let error as VueError {
             return .result(dialog: IntentDialog(stringLiteral: error.errorDescription ?? "That didn't work."))
@@ -281,67 +351,5 @@ public struct RoomStatusIntent: AppIntent {
         } catch let error as VueError {
             return .result(dialog: IntentDialog(stringLiteral: error.errorDescription ?? "That didn't work."))
         }
-    }
-}
-
-// MARK: - The shortcuts
-
-/// What Siri is trained to listen for.
-///
-/// Two ceilings apply, both counted expansively: **10 App Shortcuts** and
-/// **1,000 total phrases**, where a phrase with a parameter counts once per
-/// possible value. Five shortcuts here, and roughly 3×(scenes) + 5 + 4 phrases
-/// — about forty against a thousand, so scenes can grow by an order of
-/// magnitude before it matters.
-///
-/// **Every phrase must contain `\(.applicationName)`.** Leaving it out still
-/// compiles and the phrase simply never matches at runtime, which is the single
-/// most common way this feature quietly dies. `INAlternativeAppNames` in
-/// Info.plist gives Siri more than one way to hear the name — "Vue" alone is
-/// routinely heard as "view".
-public struct VueShortcuts: AppShortcutsProvider {
-    public static var appShortcuts: [AppShortcut] {
-        AppShortcut(
-            intent: ActivateSceneIntent(),
-            phrases: [
-                "\(.applicationName) \(\.$scene)",
-                "Set \(\.$scene) with \(.applicationName)",
-                "Turn on \(\.$scene) in \(.applicationName)",
-            ],
-            shortTitle: "Set a scene",
-            systemImageName: "lightbulb.fill")
-
-        AppShortcut(
-            intent: AllLightsOffIntent(),
-            phrases: [
-                "Turn off \(.applicationName)",
-                "Lights out in \(.applicationName)",
-            ],
-            shortTitle: "All off",
-            systemImageName: "power")
-
-        AppShortcut(
-            intent: AllLightsOnIntent(),
-            phrases: [
-                "Turn on \(.applicationName)",
-            ],
-            shortTitle: "All on",
-            systemImageName: "sun.max.fill")
-
-        AppShortcut(
-            intent: SetBrightnessIntent(),
-            phrases: [
-                "Set \(.applicationName) to \(\.$level)",
-            ],
-            shortTitle: "Set brightness",
-            systemImageName: "sun.max")
-
-        AppShortcut(
-            intent: RoomStatusIntent(),
-            phrases: [
-                "What's on in \(.applicationName)",
-            ],
-            shortTitle: "What's on",
-            systemImageName: "questionmark.circle")
     }
 }

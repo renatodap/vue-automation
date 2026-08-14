@@ -50,6 +50,23 @@ private struct StatePayload: Decodable {
     let message: String?
 }
 
+public enum CopyTargets: Sendable {
+    case all
+    case lamps([String])
+}
+
+public struct CopyResult: Sendable {
+    public let copied: [String]
+    /// Lamps that were asked for and could not be reached — named, because the
+    /// alternative is a copy that silently applied to two of three lamps.
+    public let unreachable: [String]
+
+    public init(copied: [String], unreachable: [String]) {
+        self.copied = copied
+        self.unreachable = unreachable
+    }
+}
+
 public struct SceneResult: Sendable {
     /// Lamps Home Assistant could not reach when the scene was applied.
     ///
@@ -65,7 +82,16 @@ public actor APIClient {
     private let session: URLSession
     private var token: String?
 
-    public init(baseURL: URL = VueAPI.defaultBaseURL, token: String? = nil) {
+    /// `timeout` is a parameter because the deadline is not a property of the
+    /// server, it is a property of who is waiting. A Control Center control is
+    /// drawn in front of a thumb that is already moving, and an answer that
+    /// arrives after Control Center has given up is worse than no answer,
+    /// because the round trip still happened.
+    public init(
+        baseURL: URL = VueAPI.defaultBaseURL,
+        token: String? = nil,
+        timeout: TimeInterval = 12
+    ) {
         self.baseURL = baseURL
         self.token = token
         let config = URLSessionConfiguration.default
@@ -73,7 +99,7 @@ public actor APIClient {
         // worse than an error, because the user acts on it.
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil
-        config.timeoutIntervalForRequest = 12
+        config.timeoutIntervalForRequest = timeout
         self.session = URLSession(configuration: config)
     }
 
@@ -126,6 +152,50 @@ public actor APIClient {
         let _: EmptyResponse = try await send(
             "/api/light", method: "POST",
             body: Body(entityIds: entityIds, on: on, brightness: brightness, kelvin: kelvin, hs: hs))
+    }
+
+    /// Make one or more lamps look like another one.
+    ///
+    /// Server-side rather than "read the source out of local state and post its
+    /// numbers back", and the difference is not academic: the app's copy of the
+    /// source lamp is up to a poll interval old, so copying from it can
+    /// propagate a colour the source no longer has and leave the two lamps
+    /// disagreeing on screen until the next refresh. The server reads the
+    /// source fresh.
+    ///
+    /// It also owns the two rules that are easy to get wrong in a client —
+    /// exactly one colour key per call, and kelvin re-clamped to each TARGET's
+    /// own range — so they live in one place instead of four.
+    ///
+    /// Returns what it managed to reach. Home Assistant stays quiet about the
+    /// rest, and silence reads as success.
+    public func copy(from source: String, to targets: CopyTargets) async throws -> CopyResult {
+        struct Body: Encodable {
+            let from: String
+            let to: TargetList
+            enum TargetList: Encodable {
+                case all, some([String])
+                func encode(to encoder: Encoder) throws {
+                    var c = encoder.singleValueContainer()
+                    switch self {
+                    case .all: try c.encode("all")
+                    case let .some(ids): try c.encode(ids)
+                    }
+                }
+            }
+        }
+        struct Response: Decodable {
+            let source: String?
+            let copied: [String]?
+            let unreachable: [String]?
+        }
+        let list: Body.TargetList = switch targets {
+        case .all: .all
+        case let .lamps(ids): .some(ids)
+        }
+        let r: Response = try await send("/api/copy", method: "POST",
+                                         body: Body(from: source, to: list))
+        return CopyResult(copied: r.copied ?? [], unreachable: r.unreachable ?? [])
     }
 
     /// Save the room exactly as it is right now as a new scene.

@@ -57,39 +57,147 @@ struct SceneStrip: View {
     }
 }
 
+/// Tap to apply. Hold to *try*.
+///
+/// The hold is the interesting one: the room changes while your thumb is down
+/// and snaps back when you lift it, so a scene can be compared against what is
+/// already there without committing to it and then having to rebuild the room
+/// by hand. It is the closest thing to "hover" a light switch can have.
+///
+/// Built on the undo snapshot rather than on a preview endpoint: capture,
+/// activate, restore. No new route, and the restore path is the same one the
+/// undo bar uses, so there is one thing to get right instead of two.
 struct SceneChip: View {
     @Environment(AppModel.self) private var model
     let scene: LightScene
     @State private var pressed = false
+    @State private var previewing = false
+    @State private var previewTask: Task<Void, Never>?
 
     private var accent: Color {
         scene.accent.flatMap(Color.init(cssHex:)) ?? Palette.accent
     }
 
     var body: some View {
-        Button {
-            Task { await model.activate(scene) }
-        } label: {
-            HStack(spacing: Metrics.space2) {
-                Circle().fill(accent).frame(width: 8, height: 8)
-                Text(scene.label)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Palette.inkPrimary)
-                    .lineLimit(1)
+        HStack(spacing: Metrics.space2) {
+            Circle().fill(accent).frame(width: 8, height: 8)
+            Text(scene.label)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Palette.inkPrimary)
+                .lineLimit(1)
+            if previewing {
+                Image(systemName: "eye.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Palette.accent)
+                    .transition(.scale.combined(with: .opacity))
             }
-            .padding(.horizontal, Metrics.space3)
-            .frame(height: Metrics.minimumTapTarget)
-            .background(Palette.surface, in: Capsule())
-            .overlay(Capsule().strokeBorder(Palette.border))
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, Metrics.space3)
+        .frame(height: Metrics.minimumTapTarget)
+        .background(previewing ? Palette.accentSubtle : Palette.surface, in: Capsule())
+        .overlay(Capsule().strokeBorder(previewing ? Palette.accentBorder : Palette.border))
+        .contentShape(Capsule())
         .scaleEffect(pressed ? 0.96 : 1)
         .animation(Motion.standard, value: pressed)
-        .onLongPressGesture(minimumDuration: 0.4, pressing: { pressed = $0 }) {
-            model.editingScene = scene
-        }
+        .animation(Motion.standard, value: previewing)
+        // One gesture again, for the same reason as on the canvas: a Button
+        // plus a long-press plus a preview timer is three recognisers arguing
+        // over one thumb.
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in beginPress() }
+                .onEnded { value in endPress(moved: value.translation.height.magnitude > 24) })
         .accessibilityLabel(scene.label)
-        .accessibilityHint("Activates this scene. Long press to edit what Siri calls it.")
+        .accessibilityHint("Activates this scene. Hold to preview it, swipe up to edit what Siri calls it.")
+        .accessibilityActions {
+            Button("Edit Siri names") { model.editingScene = scene }
+        }
+    }
+
+    private func beginPress() {
+        guard !pressed else { return }
+        pressed = true
+        previewTask = Task { @MainActor in
+            // Long enough that a normal tap never trips it, short enough that
+            // "hold to see it" is discoverable by accident.
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            previewing = true
+            await model.beginPreview(scene)
+        }
+    }
+
+    private func endPress(moved: Bool) {
+        pressed = false
+        previewTask?.cancel()
+        previewTask = nil
+        let wasPreviewing = previewing
+        previewing = false
+
+        Task { @MainActor in
+            if wasPreviewing {
+                // Released after a preview: put the room back. Committing here
+                // instead would make "let me look at it" indistinguishable from
+                // "apply it", which defeats the point.
+                await model.endPreview(keep: false)
+                return
+            }
+            if moved {
+                model.editingScene = scene
+                return
+            }
+            await model.activate(scene)
+        }
+    }
+}
+
+// MARK: - Undo
+
+/// One tap back to how the room was.
+///
+/// It occupies a grid row rather than floating over the canvas: a toast that
+/// covers a lamp while you are deciding whether you liked the change is in the
+/// way of the only evidence you have. The row collapses to nothing when there
+/// is nothing to undo, so the layout does not jump for a control that is
+/// usually absent.
+struct UndoBar: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if let undo = model.undoState {
+                Button {
+                    Task { await model.revert() }
+                } label: {
+                    HStack(spacing: Metrics.space2) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 12, weight: .semibold))
+                        // Names what it will reverse. "Undo" on its own makes
+                        // the user guess, and guessing wrong in a dark room
+                        // means doing it all again.
+                        Text("Undo “\(undo.label)”")
+                            .font(.system(size: 13, weight: .medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(Palette.accent)
+                    .padding(.horizontal, Metrics.space3)
+                    .frame(height: 38)
+                    .frame(maxWidth: .infinity)
+                    .background(Palette.accentSubtle,
+                                in: RoundedRectangle(cornerRadius: Metrics.radiusMD))
+                    .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMD)
+                        .strokeBorder(Palette.accentBorder))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, Metrics.pagePadding)
+                .padding(.bottom, Metrics.space2)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.adaptive(Motion.sheet, reduceMotion: reduceMotion),
+                   value: model.undoState)
     }
 }
 
@@ -184,7 +292,6 @@ struct LampRow: View {
                         .frame(width: Metrics.minimumTapTarget, height: Metrics.minimumTapTarget)
                 }
                 .buttonStyle(.plain)
-                .disabled(!lamp.reachable)
                 .accessibilityLabel(lamp.on ? "Turn off \(lamp.name)" : "Turn on \(lamp.name)")
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -193,13 +300,14 @@ struct LampRow: View {
                         .font(.system(size: 14))
                         .foregroundStyle(Palette.inkPrimary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(subtitle)
+                    Text(lamp.statusLine)
                         .font(.system(size: 12))
-                        .foregroundStyle(Palette.inkMuted)
+                        .foregroundStyle(lamp.reachable ? Palette.inkMuted : Palette.warning)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
 
-                if lamp.reachable && lamp.on {
+                if lamp.reachable {
                     Button {
                         model.inspecting = lamp
                     } label: {
@@ -216,18 +324,21 @@ struct LampRow: View {
                 BrightnessSlider(lamp: lamp)
             }
         }
+        // The list is the VoiceOver surface, so the canvas gestures need named
+        // equivalents here too.
+        .accessibilityActions {
+            if lamp.reachable {
+                Button("Only this lamp") { Task { await model.solo(lamp) } }
+                Button("Match every lamp to this") { Task { await model.matchAll(to: lamp) } }
+            }
+        }
         .padding(.horizontal, Metrics.space2)
         .padding(.vertical, Metrics.space1)
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMD))
         .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMD).strokeBorder(Palette.border))
-        .opacity(lamp.reachable ? 1 : 0.5)
-    }
-
-    private var subtitle: String {
-        guard lamp.reachable else { return "Unreachable — switch may be off" }
-        guard lamp.on else { return "Off" }
-        let k = lamp.kelvin.map { "\($0)K" } ?? "colour"
-        return "\(lamp.brightness ?? 100)% · \(k)"
+        // Dimmed, but not to the point of looking disabled-and-therefore-broken.
+        // The row still responds — tapping it explains what is wrong.
+        .opacity(lamp.reachable ? 1 : 0.72)
     }
 }
 

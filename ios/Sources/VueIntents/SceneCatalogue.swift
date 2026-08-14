@@ -40,34 +40,39 @@ public struct SceneCatalogue: Codable, Sendable {
     }
 
     public static let empty = SceneCatalogue(scenes: [], updatedAt: .distantPast)
+
+    /// Changes exactly when something Siri or a widget renders changes, and not
+    /// when the lamps move.
+    ///
+    /// `updateAppShortcutParameters()` and `WidgetCenter.reloadAllTimelines()`
+    /// are both cheap-ish and both rate-limited by the system, so calling them
+    /// on every five-second poll is a way to have them ignored when they matter.
+    /// This is what they are gated on.
+    public var signature: String {
+        scenes
+            .map { "\($0.entityId)|\($0.label)|\($0.symbol)|\($0.aliases.joined(separator: ","))" }
+            .joined(separator: ";")
+    }
 }
 
 /// Reads and writes the mirror. Not an actor: every operation is a single
 /// atomic file read or write, and making it one would force `await` into
 /// `suggestedEntities()`, which is the call that most needs to be cheap.
+///
+/// The file lives in the **App Group container**, not in the app's own
+/// Application Support. That is what lets the widget extension and the Control
+/// Center control read the same list without a network call of their own —
+/// `VueShared` migrates the old per-process file across on first read.
 public enum SceneCatalogueStore {
     private static let filename = "siri-scenes.json"
 
-    private static var url: URL? {
-        guard let dir = try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true) else { return nil }
-        return dir.appendingPathComponent(filename)
-    }
-
     public static func load() -> SceneCatalogue {
-        guard let url, let data = try? Data(contentsOf: url),
-              let catalogue = try? JSONDecoder().decode(SceneCatalogue.self, from: data)
-        else { return .empty }
-        return catalogue
+        VueShared.read(SceneCatalogue.self, from: filename) ?? .empty
     }
 
     /// Every failure degrades to "Siri has an older list", never to a crash.
     public static func save(_ catalogue: SceneCatalogue) {
-        guard let url, let data = try? JSONEncoder().encode(catalogue) else { return }
-        // Atomic, so a Siri request landing mid-write reads the whole previous
-        // file rather than a truncated one.
-        try? data.write(to: url, options: .atomic)
+        VueShared.write(catalogue, to: filename)
     }
 
     /// Fold a fresh `/api/state` into the mirror, preserving the aliases and

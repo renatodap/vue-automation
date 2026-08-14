@@ -33,6 +33,7 @@ public struct RoomScreen: View {
             }
 
             SceneStrip()
+            UndoBar()
             MasterBar()
         }
         .background(Palette.background.ignoresSafeArea())
@@ -143,6 +144,14 @@ struct RoomCanvas: View {
             // is supposed to be sitting on.
             let fitted = Self.fit(Self.plateAspect, in: geo.size)
 
+            // Every lamp's centre, in this canvas's coordinate space.
+            //
+            // Computed once here and handed down rather than measured per
+            // marker: a lamp being dragged has to know where its SIBLINGS are to
+            // find a drop target, and a view cannot ask another view where it
+            // ended up.
+            let centres = Self.centres(model.state.lamps, in: fitted)
+
             ZStack {
                 Image("room-plate", bundle: .module)
                     .resizable()
@@ -150,22 +159,43 @@ struct RoomCanvas: View {
                     .opacity(0.92)
                     .accessibilityHidden(true)
 
-                ForEach(Array(model.state.lamps.enumerated()), id: \.element.entityId) { index, lamp in
-                    let p = Placement.point(for: lamp, index: index, of: model.state.lamps.count)
-                    LampMarker(lamp: lamp)
-                        .position(x: fitted.minX + fitted.width * p.x,
-                                  y: fitted.minY + fitted.height * p.y)
+                ForEach(model.state.lamps) { lamp in
+                    LampMarker(lamp: lamp, centres: centres)
+                        .position(centres[lamp.entityId] ?? .zero)
+                }
+
+                if let carry = model.carry,
+                   let source = model.state.lamps.first(where: { $0.entityId == carry.source }) {
+                    CarryChip(lamp: source)
+                        .position(carry.location)
+                        .allowsHitTesting(false)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            .coordinateSpace(name: RoomCanvas.space)
             // Dragging empty floor drives every lamp at once. This is the
             // gesture that removes the most work: warming or dimming the whole
             // room without a mode switch or a trip to a master panel.
             .contentShape(Rectangle())
-            .roomControl(targets: model.state.reachable.map(\.entityId))
+            .roomControl(targets: model.state.reachable.map(\.entityId), lamp: nil, centres: [:])
         }
         .padding(.horizontal, Metrics.space2)
         .frame(maxHeight: .infinity)
+    }
+
+    /// Named so a drag can report its location in the same space the lamp
+    /// centres were computed in. A drag reported in `.local` and hit-tested
+    /// against canvas coordinates misses by the marker's own offset, which is
+    /// close enough to work sometimes — the worst kind of wrong.
+    static let space = "vue.room"
+
+    static func centres(_ lamps: [Lamp], in fitted: CGRect) -> [String: CGPoint] {
+        Dictionary(uniqueKeysWithValues: lamps.enumerated().map { index, lamp in
+            let p = Placement.point(for: lamp, index: index, of: lamps.count)
+            return (lamp.entityId, CGPoint(
+                x: fitted.minX + fitted.width * p.x,
+                y: fitted.minY + fitted.height * p.y))
+        })
     }
 
     /// The rect an aspect-fitted image occupies inside a container.
@@ -182,17 +212,51 @@ struct RoomCanvas: View {
     }
 }
 
+/// The lamp that follows your finger while you drag it onto another.
+struct CarryChip: View {
+    let lamp: Lamp
+
+    var body: some View {
+        HStack(spacing: Metrics.space1) {
+            Circle().fill(Color(lamp: lamp)).frame(width: 10, height: 10)
+            Text(lamp.name)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Palette.inkPrimary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, Metrics.space2)
+        .padding(.vertical, Metrics.space1)
+        .background(Palette.elevated, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.accentBorder))
+        .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
+        .offset(y: -34)
+    }
+}
+
 /// One lamp: a dot in its real colour, with a glow that tracks brightness.
 struct LampMarker: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let lamp: Lamp
+    let centres: [String: CGPoint]
 
     private var colour: Color { Color(lamp: lamp) }
     private var level: Double { Double(lamp.brightness ?? 0) / 100 }
+    /// This lamp is about to receive another lamp's settings.
+    private var isDropTarget: Bool { model.carry?.target == lamp.entityId }
+    private var isBeingCarried: Bool { model.carry?.source == lamp.entityId }
 
     var body: some View {
         ZStack {
+            // The drop-target ring. It has to be unmistakable: the whole
+            // interaction is "let go HERE", and a subtle highlight on a 26pt dot
+            // in a dark room is not an answer to that.
+            if isDropTarget {
+                Circle()
+                    .strokeBorder(Palette.accent, lineWidth: 3)
+                    .frame(width: 54, height: 54)
+                    .transition(.scale.combined(with: .opacity))
+            }
             if lamp.on && lamp.reachable {
                 // The glow IS the brightness readout. You should be able to see
                 // what the room is doing without reading a number.
@@ -217,19 +281,31 @@ struct LampMarker: View {
         // A 26pt dot is not a 44pt target. The hit area is invisible and large.
         .frame(width: 62, height: 62)
         .contentShape(Circle())
-        .roomControl(targets: lamp.reachable ? [lamp.entityId] : [])
-        .onLongPressGesture(minimumDuration: 0.4) {
-            guard lamp.reachable else { return }
-            model.inspecting = lamp
-        }
+        .opacity(isBeingCarried ? 0.35 : 1)
+        // Every lamp gesture, in ONE recogniser. Tap, double-tap, drag to
+        // adjust, hold, and hold-then-drag to copy — see `RoomControl` for why
+        // splitting these across several SwiftUI gestures does not work.
+        .roomControl(
+            targets: lamp.reachable ? [lamp.entityId] : [],
+            lamp: lamp,
+            centres: centres)
         .animation(Motion.adaptive(Motion.standard, reduceMotion: reduceMotion), value: lamp.on)
         .animation(Motion.adaptive(Motion.standard, reduceMotion: reduceMotion), value: lamp.brightness)
+        .animation(Motion.adaptive(Motion.sheet, reduceMotion: reduceMotion), value: isDropTarget)
         .accessibilityElement()
         .accessibilityLabel(lamp.name)
         .accessibilityValue(lamp.reachable
             ? (lamp.on ? "On, \(lamp.brightness ?? 0) percent" : "Off")
-            : "Unreachable")
+            : "No power — switched off at the lamp")
         .accessibilityAddTraits(.isButton)
+        // VoiceOver cannot drag a dot onto another dot. Every gesture above has
+        // a named equivalent here, because a capability that only exists as a
+        // gesture does not exist for everyone.
+        .accessibilityActions {
+            Button("Adjust") { model.inspecting = lamp }
+            Button("Only this lamp") { Task { await model.solo(lamp) } }
+            Button("Match every lamp to this") { Task { await model.matchAll(to: lamp) } }
+        }
     }
 }
 
@@ -246,6 +322,11 @@ struct LampMarker: View {
 struct RoomControl: ViewModifier {
     @Environment(AppModel.self) private var model
     let targets: [String]
+    /// The lamp this modifier is attached to, or nil for the floor.
+    let lamp: Lamp?
+    /// Every lamp's centre, so a carried lamp can find what it is over.
+    let centres: [String: CGPoint]
+
     /// Nil until the drag has travelled far enough to mean something. Once set
     /// it stays set for the rest of the drag — an axis that can flip under the
     /// thumb feels broken.
@@ -256,6 +337,19 @@ struct RoomControl: ViewModifier {
     /// runs away.
     @State private var anchorBrightness = 0
     @State private var anchorKelvin = 0
+    /// Every lamp's own brightness at touch-down, for proportional scaling.
+    @State private var anchors: [String: Int] = [:]
+    @State private var ticker = DetentTicker()
+
+    /// Set by a timer 0.4s after touch-down if nothing else has claimed the
+    /// gesture. From then on the drag carries the lamp instead of adjusting it.
+    @State private var armed = false
+    @State private var armTask: Task<Void, Never>?
+    @State private var carrying = false
+
+    /// For double-tap. Static because it has to survive this modifier's own
+    /// state being torn down between two taps on the same lamp.
+    @State private var lastTapAt = Date.distantPast
 
     enum Axis { case brightness, warmth }
 
@@ -263,8 +357,17 @@ struct RoomControl: ViewModifier {
     private let slop: CGFloat = 10
 
     func body(content: Content) -> some View {
+        // ONE `DragGesture(minimumDistance: 0)` carries tap, double-tap,
+        // hold, hold-and-drag, and both adjustment axes.
+        //
+        // The temptation is to write five gestures and let SwiftUI arbitrate.
+        // It does not arbitrate, it guesses, and the guesses are not stable
+        // across builds — a `.onLongPressGesture` next to a zero-distance
+        // `DragGesture` on the same view is a coin flip over which one sees the
+        // touch. `minimumDistance: 0` also means `onChanged` fires at
+        // touch-DOWN, which is what makes the hold timer possible here at all.
         content.gesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 0, coordinateSpace: .named(RoomCanvas.space))
                 .onChanged { value in handleChange(value) }
                 .onEnded { value in handleEnd(value) })
     }
@@ -274,11 +377,39 @@ struct RoomControl: ViewModifier {
         let dx = value.translation.width
         let dy = value.translation.height
 
+        // Touch-down. Start the hold timer; a lamp held still becomes carryable.
+        if axis == nil, !carrying, armTask == nil {
+            anchors = model.brightnessAnchors(for: targets)
+            armTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled, axis == nil else { return }
+                armed = true
+                Haptics.thud()
+            }
+        }
+
+        if carrying {
+            updateCarry(to: value.location)
+            return
+        }
+
         if axis == nil {
             guard max(abs(dx), abs(dy)) > slop else { return }
+            // Held first, then moved: this is a copy, not an adjustment. Only
+            // a real lamp can be carried — the floor has nothing to copy from.
+            if armed, let lamp, lamp.reachable {
+                carrying = true
+                model.carry = AppModel.Carry(
+                    source: lamp.entityId, location: value.location, target: nil)
+                updateCarry(to: value.location)
+                return
+            }
+            armTask?.cancel()
+            armTask = nil
             axis = abs(dy) >= abs(dx) ? .brightness : .warmth
             anchorBrightness = model.state.averageBrightness
             anchorKelvin = model.state.averageKelvin
+            ticker.reset()
             model.beginGesture(on: targets)
         }
 
@@ -292,59 +423,168 @@ struct RoomControl: ViewModifier {
         Task { @MainActor in
             switch axis {
             case .brightness:
-                // Up is brighter. 220pt of travel spans the full range.
-                let level = anchorBrightness + Int((-dy / 220) * 100)
-                await model.setBrightness(max(1, min(100, level)), on: targets, commit: commit)
+                await driveBrightness(dy: dy, commit: commit)
             case .warmth:
-                let range = model.state.kelvinRange
-                let span = Double(range.upperBound - range.lowerBound)
-                let k = anchorKelvin + Int((dx / 260) * span)
-                await model.setKelvin(max(range.lowerBound, min(range.upperBound, k)),
-                                      on: targets, commit: commit)
+                let k = warmth(dx: dx)
+                ticker.track(k / 100, every: 5)
+                await model.setKelvin(k, on: targets, commit: commit)
             case nil:
                 break
             }
         }
     }
 
+    /// One lamp moves absolutely; the whole room scales proportionally.
+    ///
+    /// Dragging the floor to "40%" and flattening four lamps onto one number is
+    /// the classic mistake — it destroys whatever shape the room had, and the
+    /// shape is the reason somebody arranged it. Scaling keeps the
+    /// relationships and only changes the overall level.
+    @MainActor
+    private func driveBrightness(dy: CGFloat, commit: Bool) async {
+        // Up is brighter. 220pt of travel spans the full range.
+        let level = max(1, min(100, anchorBrightness + Int((-dy / 220) * 100)))
+        ticker.track(level)
+        if targets.count > 1, anchorBrightness > 0 {
+            await model.scaleBrightness(
+                factor: Double(level) / Double(anchorBrightness),
+                from: anchors, commit: commit)
+        } else {
+            await model.setBrightness(level, on: targets, commit: commit)
+        }
+    }
+
+    private func warmth(dx: CGFloat) -> Int {
+        let range = model.state.kelvinRange
+        let span = Double(range.upperBound - range.lowerBound)
+        let k = anchorKelvin + Int((dx / 260) * span)
+        return max(range.lowerBound, min(range.upperBound, k))
+    }
+
+    /// Which lamp is under the finger, if any.
+    ///
+    /// Nearest-within-a-radius rather than a hit test on the 26pt dot: the
+    /// finger is over the dot it is aiming at, but the touch point is wherever
+    /// the pad of the thumb landed, and requiring pixel accuracy to drop makes
+    /// the whole interaction feel like it does not work.
+    private func updateCarry(to location: CGPoint) {
+        guard var carry = model.carry else { return }
+        let hit = centres
+            .filter { $0.key != carry.source }
+            .filter { id, _ in
+                model.state.lamps.first { $0.entityId == id }?.reachable == true
+            }
+            .map { ($0.key, hypot($0.value.x - location.x, $0.value.y - location.y)) }
+            .filter { $0.1 < 46 }
+            .min { $0.1 < $1.1 }?.0
+
+        if hit != carry.target, hit != nil { Haptics.detent() }
+        carry.location = location
+        carry.target = hit
+        model.carry = carry
+    }
+
     private func handleEnd(_ value: DragGesture.Value) {
-        guard !targets.isEmpty else { return }
+        // An unreachable lamp has no targets, but it must still answer a tap.
+        // Silence here is what makes a dead bulb read as a dead app — this is
+        // the most common non-normal state in the room and it deserves a
+        // sentence, not a grey dot.
+        guard !targets.isEmpty else {
+            if let lamp, !lamp.reachable {
+                Task { @MainActor in await model.toggle(lamp) }
+            }
+            return
+        }
+        armTask?.cancel()
+        armTask = nil
         let settled = axis
+        let wasArmed = armed
+        let wasCarrying = carrying
+        let drop = model.carry?.target
         let dx = value.translation.width
         let dy = value.translation.height
         axis = nil
+        armed = false
+        carrying = false
+        model.carry = nil
         lastCommit = .distantPast
+        ticker.reset()
 
         Task { @MainActor in
+            if wasCarrying {
+                guard let source = lamp, let drop,
+                      let target = model.state.lamps.first(where: { $0.entityId == drop })
+                else {
+                    // Dropped on nothing. Say so rather than leave the user
+                    // wondering whether it silently worked.
+                    Haptics.warn()
+                    model.flash("Drop it on another lamp to copy its look")
+                    return
+                }
+                await model.copySettings(from: source, to: [target])
+                return
+            }
+
             defer { model.endGesture(on: targets) }
             switch settled {
             case .brightness:
                 // Final value, unthrottled, so the lamp lands exactly where the
                 // thumb left it rather than wherever the last throttled tick was.
-                let level = anchorBrightness + Int((-dy / 220) * 100)
-                await model.setBrightness(max(1, min(100, level)), on: targets, commit: true)
+                await driveBrightness(dy: dy, commit: true)
             case .warmth:
-                let range = model.state.kelvinRange
-                let span = Double(range.upperBound - range.lowerBound)
-                let k = anchorKelvin + Int((dx / 260) * span)
-                await model.setKelvin(max(range.lowerBound, min(range.upperBound, k)),
-                                      on: targets, commit: true)
+                await model.setKelvin(warmth(dx: dx), on: targets, commit: true)
             case nil:
-                // Never moved: it was a tap. Only meaningful on a single lamp —
-                // a tap on empty floor should do nothing, because "toggle
-                // everything" by accident is a bad surprise in a dark room.
-                if targets.count == 1,
-                   let lamp = model.state.lamps.first(where: { $0.entityId == targets[0] }) {
-                    await model.toggle(lamp)
-                }
+                await handleTap(heldStill: wasArmed)
             }
+        }
+    }
+
+    @MainActor
+    private func handleTap(heldStill: Bool) async {
+        // Held without moving: open the detail sheet. Same gesture that starts
+        // a copy, resolved by whether the finger travelled — which is exactly
+        // how dragging a Home Screen icon works, so it is already learned.
+        if heldStill {
+            if let lamp, lamp.reachable { model.inspecting = lamp }
+            return
+        }
+
+        guard let lamp else {
+            // A tap on empty floor does nothing — "toggle everything" by
+            // accident is a bad surprise in a dark room — but a DOUBLE tap on
+            // the floor is unambiguous, and "all off" is the one command worth
+            // reaching without aiming.
+            if Date.now.timeIntervalSince(lastTapAt) < 0.35 {
+                lastTapAt = .distantPast
+                await model.allOff()
+            } else {
+                lastTapAt = .now
+            }
+            return
+        }
+
+        // Second tap on the same lamp inside the window: solo it.
+        //
+        // The first tap has already toggled, deliberately — delaying every
+        // single tap by 350ms to find out whether a second one is coming makes
+        // the common case feel broken to save the rare one.
+        if Date.now.timeIntervalSince(lastTapAt) < 0.35 {
+            lastTapAt = .distantPast
+            await model.solo(lamp)
+        } else {
+            lastTapAt = .now
+            await model.toggle(lamp)
         }
     }
 }
 
 extension View {
-    /// Tap-to-toggle and drag-to-adjust, over one or many lamps.
-    func roomControl(targets: [String]) -> some View {
-        modifier(RoomControl(targets: targets))
+    /// Every room gesture, in one recogniser.
+    ///
+    /// - `lamp`: nil for the floor, which can be adjusted and double-tapped but
+    ///   not carried.
+    /// - `centres`: where the other lamps are, for finding a drop target.
+    func roomControl(targets: [String], lamp: Lamp?, centres: [String: CGPoint]) -> some View {
+        modifier(RoomControl(targets: targets, lamp: lamp, centres: centres))
     }
 }

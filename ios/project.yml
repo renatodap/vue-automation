@@ -23,6 +23,10 @@ targets:
     dependencies:
       - package: VueLights
         product: VueLightsKit
+      # Embeds the widget extension into PlugIns/. Without this the extension
+      # builds and is simply not in the .app, which presents as a widget that
+      # never appears in the gallery — no error anywhere.
+      - target: VueWidgets
     info:
       path: App/Resources/Info.plist
       properties:
@@ -64,6 +68,21 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: me.renatodap.vuelights
             CFBundleURLSchemes: [vuelights]
+    entitlements:
+      path: App/Resources/VueLights.entitlements
+      properties:
+        # The container the app and the widget extension both open. This is not
+        # a nicety: they are separate processes with separate sandboxes, so
+        # without it the widget's `UserDefaults.standard` and Application Support
+        # are its OWN, the scene mirror the app writes is invisible to it, and
+        # the widget renders its empty state forever with nothing logged.
+        #
+        # This file is generated FROM here — `xcodegen generate` overwrites
+        # whatever Xcode's capabilities UI wrote, so a group added in the UI and
+        # not mirrored here vanishes at the next generate and the failure shows
+        # up days later as an empty widget.
+        com.apple.security.application-groups:
+          - group.me.renatodap.vuelights
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.renatodap.vuelights
@@ -82,8 +101,55 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: T59UJ8766W
         GENERATE_INFOPLIST_FILE: "NO"
-        # No entitlements file and no capabilities on purpose. The first build's
-        # job is to prove signing and the upload path; every capability added
-        # here is another thing that can fail provisioning for a reason the log
-        # describes badly. The App Group arrives with the widget extension, which
-        # is the first thing that actually needs one.
+
+  # The widget extension: the Home Screen widget and both Control Center
+  # controls. Its own process, its own sandbox, its own memory ceiling — which is
+  # why it links VueIntentsKit and VueDesignSystemKit rather than the whole app.
+  VueWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets/Sources
+    dependencies:
+      - package: VueLights
+        product: VueIntentsKit
+      - package: VueLights
+        product: VueDesignSystemKit
+    info:
+      path: Widgets/Resources/Info.plist
+      properties:
+        # Shown under the widget in the gallery and in Settings. Same name as
+        # the app on purpose — two names for one thing is how you get "which of
+        # these is the lights?".
+        CFBundleDisplayName: Vue Lights
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          # WidgetKit extensions are still plain app extensions, not
+          # ExtensionKit ones. Get this identifier wrong and the target builds,
+          # embeds, and is never loaded by anything.
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widgets/Resources/VueWidgets.entitlements
+      properties:
+        # Must be character-for-character the app's group. A mismatch is not a
+        # build error — `containerURL(forSecurityApplicationGroupIdentifier:)`
+        # simply returns nil and every read falls back to this process's own
+        # empty container.
+        com.apple.security.application-groups:
+          - group.me.renatodap.vuelights
+    settings:
+      base:
+        # Must be a prefix-extension of the app's identifier. Anything else is
+        # rejected at install time, not at build time.
+        PRODUCT_BUNDLE_IDENTIFIER: me.renatodap.vuelights.widgets
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: "YES"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: T59UJ8766W
+        GENERATE_INFOPLIST_FILE: "NO"
+        # The extension ships inside the app, never on its own.
+        SKIP_INSTALL: "YES"

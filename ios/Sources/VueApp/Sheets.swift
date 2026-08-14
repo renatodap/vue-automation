@@ -91,6 +91,9 @@ struct LampDetailSheet: View {
                         }
                     }
 
+                    nudges
+                    copyTargets
+
                     Button {
                         Task { await model.toggle(current); dismiss() }
                     } label: {
@@ -117,6 +120,106 @@ struct LampDetailSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(Palette.background)
+    }
+
+    /// Coarse steps, for the correction a slider cannot make.
+    ///
+    /// "A bit dimmer" is the most common adjustment there is, and it is
+    /// precisely the one a thumb on a 300pt slider cannot make repeatably — the
+    /// finger covers the value it is trying to read. A pair of buttons is
+    /// exact, repeatable, and works without looking.
+    private var nudges: some View {
+        VStack(alignment: .leading, spacing: Metrics.space2) {
+            nudgeRow("Brightness", minus: "−10%", plus: "+10%") { delta in
+                await model.nudgeBrightness(delta * 10, on: [current])
+                brightness = Double(model.state.lamps
+                    .first { $0.entityId == lamp.entityId }?.brightness ?? Int(brightness))
+            }
+            nudgeRow("Warmth", minus: "Warmer", plus: "Cooler") { delta in
+                await model.nudgeKelvin(delta * 200, on: [current])
+                kelvin = Double(model.state.lamps
+                    .first { $0.entityId == lamp.entityId }?.kelvin ?? Int(kelvin))
+            }
+        }
+    }
+
+    private func nudgeRow(
+        _ title: String, minus: String, plus: String,
+        _ action: @escaping (Int) async -> Void
+    ) -> some View {
+        HStack(spacing: Metrics.space2) {
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.inkSecondary)
+                .frame(width: 74, alignment: .leading)
+            ForEach([(-1, minus), (1, plus)], id: \.1) { delta, label in
+                Button { Task { await action(delta) } } label: {
+                    Text(label)
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: Metrics.minimumTapTarget)
+                        .background(Palette.neutralSurface,
+                                    in: RoundedRectangle(cornerRadius: Metrics.radiusMD))
+                        .foregroundStyle(Palette.inkSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .disabled(!current.reachable)
+    }
+
+    /// "Make that one look like this one."
+    ///
+    /// The map has a drag gesture for this, which is faster once you know it
+    /// exists. This is the discoverable version, and the only version under
+    /// VoiceOver — you cannot drag a dot onto another dot with a screen reader.
+    @ViewBuilder
+    private var copyTargets: some View {
+        let others = model.state.reachable.filter { $0.entityId != lamp.entityId }
+        if !others.isEmpty {
+            VStack(alignment: .leading, spacing: Metrics.space2) {
+                Text("COPY THIS LOOK TO")
+                    .font(.system(size: 11, weight: .medium))
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.inkMuted)
+
+                ScrollView(.horizontal) {
+                    HStack(spacing: Metrics.space2) {
+                        ForEach(others) { other in
+                            copyChip(other.name) {
+                                await model.copySettings(from: current, to: [other])
+                            }
+                        }
+                        if others.count > 1 {
+                            copyChip("Every lamp", emphasised: true) {
+                                await model.matchAll(to: current)
+                            }
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
+        }
+    }
+
+    private func copyChip(
+        _ title: String, emphasised: Bool = false, _ action: @escaping () async -> Void
+    ) -> some View {
+        Button {
+            Task { await action(); dismiss() }
+        } label: {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .padding(.horizontal, Metrics.space3)
+                .frame(height: 38)
+                .background(emphasised ? Palette.accentSubtle : Palette.neutralSurface,
+                            in: Capsule())
+                .overlay(Capsule().strokeBorder(
+                    emphasised ? Palette.accentBorder : Palette.border))
+                .foregroundStyle(emphasised ? Palette.accent : Palette.inkSecondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(!current.reachable)
     }
 
     private var preview: some View {
@@ -253,10 +356,12 @@ struct SceneEditorSheet: View {
     }
 
     /// Exactly the phrases `VueShortcuts` generates for this scene.
+    ///
+    /// Each name — the label and every alias — expands into one phrase per
+    /// template, which is how the 1,000-phrase ceiling is counted. At three
+    /// templates, a scene with four aliases is fifteen phrases on its own.
     private var phrases: [String] {
-        ([scene.label] + aliases).flatMap { name in
-            ["Vue Lights \(name)", "Set \(name) with Vue Lights"]
-        }
+        ([scene.label] + aliases).flatMap(ScenePhrasing.spoken(for:))
     }
 
     private func add() {

@@ -1,5 +1,6 @@
 import SwiftUI
 import VueApp
+import VueIntents
 
 /// The iOS app target's entry point.
 ///
@@ -10,6 +11,17 @@ import VueApp
 /// builds fine; the Release archive fails to link. See `VueLightsRoot`.
 @main
 struct AppMain: App {
+    init() {
+        // `VueShortcuts` can only live in this target (see its own comment), and
+        // `AppModel` — which knows when the scene list changed — lives in the
+        // package. This hands the package the one call it cannot make itself.
+        //
+        // In `init`, not in `.task`: the model refreshes on first appearance and
+        // would otherwise find nothing registered on exactly the launch that
+        // matters most, the first one.
+        ShortcutSync.register { VueShortcuts.updateAppShortcutParameters() }
+    }
+
     var body: some Scene {
         WindowGroup {
             VueLightsRoot()
