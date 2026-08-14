@@ -48,20 +48,31 @@ export const databaseUrl = () => {
 };
 
 /**
- * Home Assistant, direct, over the tailnet — used for exactly ONE thing.
+ * Home Assistant, direct, over the tailnet — REQUIRED by the Zigbee tools.
  *
- * Renaming an entity means writing the entity registry, and the registry has no
- * REST surface at all: it is a WebSocket-only command. The Next app cannot grow
- * that without a new dependency, and it is not a behaviour the app implements
- * anywhere, so it lives here beside the Zigbee2MQTT half of the same rename.
+ * Two things live only here. The entity and device registries are WebSocket-
+ * only commands with no REST equivalent, which the Next app cannot reach
+ * without taking a dependency for a feature it does not have. And `mqtt.publish`
+ * is how a Zigbee2MQTT bridge request gets onto the broker at all: Mosquitto's
+ * credentials sit in the add-on configuration behind the Supervisor, which
+ * refuses a long-lived token, while Home Assistant is already authenticated to
+ * it. Port 80 over the tailnet, not 8123.
  *
- * Optional. Without it `name_device` still performs the Zigbee2MQTT rename and
- * reports plainly that the Home Assistant entity was left alone.
+ * Without these, `get_room` and every scene, lamp and schedule tool still work
+ * — they go through the app — but the four Zigbee device tools cannot.
  */
 export const haBaseUrl = () => (process.env.HA_BASE_URL || "").replace(/\/+$/, "");
 export const haToken = () => process.env.HA_TOKEN || "";
 
-/** Mosquitto on the Pi, over the tailnet: `mqtt://100.85.128.101:1883`. */
+/**
+ * Mosquitto on the Pi, over the tailnet: `mqtt://100.85.128.101:1883`.
+ *
+ * OPTIONAL ENRICHMENT ONLY. When it connects, `poll_pairing` gains live
+ * interview progress off `bridge/event` and the device list gains the z2m-only
+ * fields; when it does not — the ordinary case, because the broker's password
+ * is not obtainable from here — every Zigbee tool still works through Home
+ * Assistant and simply reports those fields as unknown.
+ */
 export const mqttUrl = () => process.env.MQTT_URL || "";
 export const mqttUsername = () => process.env.MQTT_USERNAME || undefined;
 export const mqttPassword = () => process.env.MQTT_PASSWORD || undefined;

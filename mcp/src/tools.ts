@@ -17,11 +17,13 @@
  * model.
  */
 import { api, ApiError, type Lamp, type SceneRow } from "./api.js";
+import { bridgeEvents, MqttError } from "./mqtt.js";
+import { HaRegistryError, renameEntity } from "./ha-registry.js";
+import { HaServiceError } from "./ha-service.js";
 import {
-  bridgeInfo, ensureConnected, listDevices, mqttConfigured, MqttError,
-  permitJoin, recentEvents, renameDevice,
-} from "./mqtt.js";
-import { entityRegistryList, haConfigured, HaRegistryError, renameEntity } from "./ha-registry.js";
+  devicesSinceSnapshot, findZigbeeDevice, pairingSnapshot, surveyZigbee,
+  takePairingSnapshot, z2mRequest, ZigbeeError, type ZigbeeDevice,
+} from "./zigbee.js";
 import { consumeProposal, createProposal, pendingProposals, ProposalError } from "./propose.js";
 
 /** A failure the model should read and correct, not an outage. */
@@ -99,7 +101,10 @@ function strArray(a: Record<string, unknown>, key: string): string[] | undefined
 /** Turn any transport failure into something the model can act on. */
 function rethrow(e: unknown): never {
   if (e instanceof ToolError) throw e;
-  if (e instanceof ApiError || e instanceof MqttError || e instanceof HaRegistryError || e instanceof ProposalError) {
+  if (
+    e instanceof ApiError || e instanceof MqttError || e instanceof HaRegistryError ||
+    e instanceof HaServiceError || e instanceof ZigbeeError || e instanceof ProposalError
+  ) {
     throw new ToolError(e.message);
   }
   throw e;
@@ -844,33 +849,36 @@ export const TOOLS: ToolDef[] = [
     name: "list_zigbee_devices",
     title: "What is joined to the Zigbee mesh",
     description:
-      "Every device Zigbee2MQTT knows, read from the broker's retained device list: IEEE address, " +
-      "friendly name, vendor and model, whether the interview finished, and how it is powered.\n\n" +
-      "This is a LAYER BELOW Home Assistant. A device can be joined here and still have no `light.*` " +
-      "entity — usually because its interview never completed. When a bulb is missing from get_room but " +
-      "present here, that is the diagnosis, and it is worth saying rather than reporting the bulb as " +
-      "absent.",
+      "Every Zigbee device Home Assistant knows about, built from its DEVICE REGISTRY: IEEE address, " +
+      "the Zigbee2MQTT friendly name, vendor and model, and every entity Home Assistant projects from " +
+      "that device.\n\n" +
+      "A device only reaches this registry once Home Assistant knows what it IS — for a Zigbee2MQTT " +
+      "device that means the interview finished and discovery was published. So a device listed here " +
+      "with no `light.*` in `entities` is a device that joined but is not a light, and a bulb that is " +
+      "missing here entirely never finished joining. Both are worth saying rather than reporting the " +
+      "bulb as simply absent.\n\n" +
+      "`enrichment` says whether the broker itself could be read. When it is \"unavailable\" — the " +
+      "normal state, because the broker's credentials are not reachable from this connector — " +
+      "`interview_completed`, `supported` and `power_source` come back NULL. Null means unknown, not " +
+      "false: do not report a device as un-interviewed on the strength of a null.",
     annotations: { readOnlyHint: true },
     inputSchema: { type: "object", properties: {} },
     handler: async () => {
-      if (!mqttConfigured()) {
-        throw new ToolError(
-          "MQTT_URL is not set on the connector, so the Zigbee mesh cannot be read. Home Assistant " +
-            "still works — use get_room for the lights that are already set up.",
-        );
-      }
       try {
-        const [devices, info] = await Promise.all([listDevices(), bridgeInfo().catch(() => ({}))]);
-        const permit = (info as Record<string, unknown>).permit_join === true;
+        const survey = await surveyZigbee();
         return {
           data: {
-            devices,
-            device_count: devices.filter((d) => d.type !== "Coordinator").length,
-            pairing_open: permit,
-            zigbee2mqtt_version: (info as Record<string, unknown>).version ?? null,
+            ...survey,
+            device_count: survey.devices.filter((d) => !d.is_coordinator).length,
             note:
-              "The coordinator is listed too and is not a bulb. A device with " +
-              "interview_completed:false has joined but is not usable yet.",
+              "Read from Home Assistant's device registry, not from the broker. The coordinator/bridge " +
+              "is listed too and is not a bulb. `friendly_name` is what a person sees; " +
+              "`zigbee2mqtt_name` is what Zigbee2MQTT itself calls the device, and is the one a rename " +
+              "has to be addressed to." +
+              (survey.enrichment === "unavailable"
+                ? " The broker could not be read, so interview_completed, supported and power_source " +
+                  "are null (unknown), and pairing_open may be null too."
+                : ""),
           },
         };
       } catch (e) {
@@ -885,7 +893,11 @@ export const TOOLS: ToolDef[] = [
       "Put Zigbee2MQTT into pairing mode for a number of seconds, then tell the user to factory-reset " +
       "the bulb — for most bulbs that is power-cycling it a set number of times, or holding the " +
       "switch until it flashes.\n\n" +
-      "Pairing is ASYNCHRONOUS. This call returns as soon as the mesh is open, long before anything " +
+      "The request goes to Zigbee2MQTT through Home Assistant's own broker connection, so it needs no " +
+      "broker credentials of its own. It also SNAPSHOTS which devices Home Assistant currently knows, " +
+      "which is what poll_pairing later diffs against — so pairing must be opened with this tool for " +
+      "poll_pairing to have a baseline.\n\n" +
+      "Pairing is ASYNCHRONOUS. This call returns as soon as the request is sent, long before anything " +
       "joins; a bulb typically announces itself somewhere between two and ninety seconds later. Do NOT " +
       "report a device as paired here — call poll_pairing afterwards and report what actually arrived.\n\n" +
       "Pass 0 to close pairing again. Leaving the mesh open indefinitely is a security matter: anything " +
@@ -898,24 +910,29 @@ export const TOOLS: ToolDef[] = [
       },
     },
     handler: async (a) => {
-      if (!mqttConfigured()) {
-        throw new ToolError("MQTT_URL is not set on the connector, so pairing cannot be started.");
-      }
       const seconds = Math.max(0, Math.min(Math.round(num(a, "seconds") ?? 120), 600));
       try {
-        const before = await listDevices().catch(() => []);
-        const res = await permitJoin(seconds);
+        // The baseline is taken BEFORE the mesh opens, so anything that joins
+        // afterwards is unambiguously new.
+        const before = await surveyZigbee();
+        const res = await z2mRequest("permit_join", { time: seconds });
+        const snapshot = takePairingSnapshot(before.devices, seconds);
         return {
           data: {
             ok: true,
             open_for_seconds: seconds,
-            since: new Date().toISOString(),
-            known_devices_before: before.length,
-            response: res,
+            since: snapshot.at,
+            known_devices_before: before.devices.length,
+            zigbee2mqtt: res,
             next:
               seconds > 0
                 ? "Tell the user to factory-reset the bulb NOW, then call poll_pairing in ~20 seconds " +
-                  "and again after that. Nothing has joined yet."
+                  "and again after that. Nothing has joined yet." +
+                  (res.confirmed
+                    ? ""
+                    : " Zigbee2MQTT's own acknowledgement could not be read (the connector has no " +
+                      "direct broker connection), so treat 'the mesh is open' as expected rather than " +
+                      "as confirmed — poll_pairing is what proves it.")
                 : "Pairing is closed.",
           },
           audit: { before: { pairing_open: false }, after: { pairing_open: seconds > 0, seconds } },
@@ -929,53 +946,85 @@ export const TOOLS: ToolDef[] = [
     name: "poll_pairing",
     title: "What has joined since pairing opened",
     description:
-      "Read the Zigbee2MQTT bridge events buffered since this connector started: `device_joined`, " +
-      "`device_interview` (started / successful / failed) and `device_announce`.\n\n" +
-      "A join is not finished until an interview is SUCCESSFUL. `device_joined` alone means the radio " +
-      "handshake worked and Zigbee2MQTT does not yet know what the device is — reporting that as " +
-      "'paired' is premature, and a failed interview afterwards is common. Wait for " +
-      "`interview_successful`, then confirm with list_zigbee_devices and get_room.\n\n" +
-      "Pass `since` (an ISO timestamp, e.g. what start_pairing returned) to see only what arrived " +
-      "after that moment.",
+      "What is new since start_pairing was called, read from Home Assistant's device registry. A " +
+      "device appears there only once its Zigbee interview finished and Home Assistant learned what it " +
+      "is — so a device showing up in `appeared` IS a finished pairing, not a half-done one.\n\n" +
+      "Report `appeared` by name and IEEE address, then name each one with name_device and confirm the " +
+      "new entity with get_room.\n\n" +
+      "`bridge_events` carries live interview progress (`device_joined`, `device_interview` " +
+      "started/successful/failed) and is only populated when the broker happens to be readable. When " +
+      "`bridge_events` is null the connector is not listening to the broker at all — that is the " +
+      "ordinary state and NOT a fault, and it does not weaken the registry signal. An empty array is " +
+      "different: it means the broker is being listened to and nothing happened.\n\n" +
+      "If `baseline` is null, start_pairing has not run in this process (the connector restarted, or " +
+      "pairing was opened elsewhere) and nothing can be called new. Say so and re-run start_pairing " +
+      "rather than reporting the whole device list as fresh arrivals.",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        since: { type: "string", description: "ISO timestamp; omit for everything buffered" },
+        since: {
+          type: "string",
+          description: "ISO timestamp for the bridge-event filter; omit to use the pairing baseline",
+        },
       },
     },
     handler: async (a) => {
-      if (!mqttConfigured()) {
-        throw new ToolError("MQTT_URL is not set on the connector, so pairing events cannot be read.");
-      }
       const since = str(a, "since");
       try {
-        await ensureConnected();
-        const events = recentEvents(since);
-        const joined = events.filter((e) => e.type === "device_joined");
-        const interviewed = events.filter(
+        const survey = await surveyZigbee();
+        const baseline = pairingSnapshot();
+        const appeared = baseline ? devicesSinceSnapshot(survey.devices, baseline) : [];
+        const events = await bridgeEvents(since ?? baseline?.at);
+        const joined = (events ?? []).filter((e) => e.type === "device_joined");
+        const interviewed = (events ?? []).filter(
           (e) => e.type === "device_interview" && e.data.status === "successful",
         );
-        const failed = events.filter(
+        const failed = (events ?? []).filter(
           (e) => e.type === "device_interview" && e.data.status === "failed",
         );
-        const info = await bridgeInfo().catch(() => ({}));
+
+        let verdict: string;
+        if (appeared.length > 0) {
+          verdict =
+            `${appeared.length} device${appeared.length === 1 ? "" : "s"} appeared in Home Assistant ` +
+            `since pairing opened: ${appeared.map((d) => `${d.friendly_name} (${d.ieee_address})`).join(", ")}. ` +
+            "Reaching the registry means the interview finished. Name each with name_device, then " +
+            "check get_room for the new light entity.";
+        } else if (interviewed.length > 0) {
+          verdict =
+            "The broker reports a successful interview but Home Assistant has not registered the " +
+            "device yet. Poll again in a few seconds before naming it.";
+        } else if (failed.length > 0) {
+          verdict =
+            "An interview FAILED. The device reached the radio but Zigbee2MQTT could not learn what it " +
+            "is — move it closer to the coordinator, factory-reset it again, and re-open pairing.";
+        } else if (joined.length > 0) {
+          verdict =
+            "Something joined but has not finished its interview. Wait and poll again — do not call it " +
+            "paired yet.";
+        } else if (!baseline) {
+          verdict =
+            "There is no pairing baseline in this process, so nothing here can be called new. Call " +
+            "start_pairing first — it records what Home Assistant already knew.";
+        } else {
+          verdict =
+            "Nothing new has reached Home Assistant yet. If pairing is still open, wait ~20 seconds " +
+            "and poll again; a bulb can take up to ninety seconds to announce itself.";
+        }
+
         return {
           data: {
-            pairing_open: (info as Record<string, unknown>).permit_join === true,
-            events,
+            read_at: survey.read_at,
+            pairing_open: survey.pairing_open,
+            baseline,
+            appeared,
+            appeared_count: appeared.length,
+            bridge_events: events,
             joined: joined.map((e) => e.data),
             interview_successful: interviewed.map((e) => e.data),
             interview_failed: failed.map((e) => e.data),
-            verdict:
-              interviewed.length > 0
-                ? "At least one device finished its interview. Name it with name_device, then check " +
-                  "get_room for the new light entity."
-                : joined.length > 0
-                  ? "Something joined but has not finished its interview. Wait and poll again — do not " +
-                    "call it paired yet."
-                  : "Nothing has joined yet. If pairing is still open, wait and poll again; the buffer " +
-                    "only holds what arrived since this connector last started.",
+            verdict,
           },
         };
       } catch (e) {
@@ -997,23 +1046,29 @@ export const TOOLS: ToolDef[] = [
       "names. Ask where the lamp actually is before naming it.\n\n" +
       "The entity id itself is never changed: scenes, automations and Siri shortcuts all reference it, " +
       "and moving it breaks them silently. Only the friendly name changes.\n\n" +
-      "THIS CAN HALF-SUCCEED, AND YOU MUST SAY SO. The Zigbee2MQTT rename happens first; the Home " +
-      "Assistant rename can still fail after it (no admin token, no entity matched, the registry " +
-      "unreachable). Check `fully_renamed` in the result: when it is false, the two systems now " +
-      "disagree about this device's name, and the result says which half landed and what to do about " +
-      "it. Reporting a half-done rename as done leaves someone hunting for a lamp that shows up under " +
-      "two different names.",
+      "THIS CAN HALF-SUCCEED, AND YOU MUST SAY SO. The two halves are attempted INDEPENDENTLY — either " +
+      "can fail without stopping the other. Check `fully_renamed`: when it is false the two systems now " +
+      "disagree about this device's name, and `summary` says which half landed and what to do about it. " +
+      "Reporting a half-done rename as done leaves someone hunting for a lamp that shows up under two " +
+      "different names.\n\n" +
+      "`zigbee2mqtt.confirmed` is a third state worth reading. The rename is published to Zigbee2MQTT " +
+      "through Home Assistant, which cannot report back what Zigbee2MQTT said; `confirmed: false` means " +
+      "the request was accepted for delivery and NOT that it failed. Do not describe that as an error — " +
+      "describe it as unconfirmed.",
     annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
       properties: {
-        ieee_address: { type: "string", description: "the device's IEEE address, from list_zigbee_devices" },
+        ieee_address: {
+          type: "string",
+          description: "the device's IEEE address from list_zigbee_devices — or its current name",
+        },
         friendly_name: { type: "string", description: "the new name, by physical position" },
         entity_id: {
           type: "string",
           description:
-            "the Home Assistant entity to rename alongside it. Omit and the connector matches it by " +
-            "IEEE address; pass it explicitly when the match is ambiguous.",
+            "the Home Assistant entity to rename alongside it. Omit and the connector uses the " +
+            "device's own primary entity; pass it explicitly when the device has several.",
         },
       },
       required: ["ieee_address", "friendly_name"],
@@ -1022,87 +1077,44 @@ export const TOOLS: ToolDef[] = [
       const ieee = requiredStr(a, "ieee_address");
       const friendly = requiredStr(a, "friendly_name");
       const explicitEntity = str(a, "entity_id");
-      if (!mqttConfigured()) {
-        throw new ToolError("MQTT_URL is not set on the connector, so the Zigbee rename cannot be done.");
-      }
 
       try {
-        const devices = await listDevices();
-        const device = devices.find(
-          (d) => d.ieee_address.toLowerCase() === ieee.toLowerCase() ||
-                 d.friendly_name.toLowerCase() === ieee.toLowerCase(),
-        );
+        const survey = await surveyZigbee();
+        const device = findZigbeeDevice(survey.devices, ieee);
         if (!device) {
           throw new ToolError(
-            `No Zigbee device with address "${ieee}". Known: ` +
-              devices.map((d) => `${d.friendly_name} (${d.ieee_address})`).join(", ") + ".",
+            `No Zigbee device matches "${ieee}". Home Assistant knows: ` +
+              (survey.devices.length
+                ? survey.devices.map((d) => `${d.friendly_name} (${d.ieee_address})`).join(", ")
+                : "no Zigbee devices at all") +
+              ". Call list_zigbee_devices and use one of these addresses.",
           );
         }
 
-        // Step one: Zigbee2MQTT. If this fails nothing has changed anywhere.
-        const z2m = await renameDevice(device.friendly_name, friendly);
+        // BOTH HALVES RUN, always. A failure in one is recorded and the other
+        // is still attempted: leaving the Home Assistant entity untouched
+        // because the broker publish failed would guarantee the two systems
+        // disagree, which is the exact outcome this tool exists to prevent.
+        const z2mResult = await renameInZigbee2Mqtt(device, friendly);
+        const haResult = await renameInHomeAssistant(device, friendly, explicitEntity);
 
-        // Step two: Home Assistant's entity registry. Reported separately and
-        // honestly — a half-done rename that claims to be done is worse than
-        // one that says which half landed.
-        let haResult: { renamed: boolean; entity_id: string | null; error?: string };
-        if (!haConfigured()) {
-          haResult = {
-            renamed: false,
-            entity_id: null,
-            error:
-              "HA_BASE_URL / HA_TOKEN are not set on the connector, so the Home Assistant entity was " +
-              "NOT renamed. Zigbee2MQTT now calls it \"" + friendly + "\" but Home Assistant does not. " +
-              "Rename it in Home Assistant, or set those variables and run this again.",
-          };
-        } else {
-          try {
-            const registry = await entityRegistryList();
-            const entityId =
-              explicitEntity ??
-              registry.find((r) => (r.unique_id ?? "").toLowerCase().includes(device.ieee_address.toLowerCase()))
-                ?.entity_id ??
-              registry.find(
-                (r) => r.platform === "mqtt" &&
-                  (r.original_name ?? "").toLowerCase() === device.friendly_name.toLowerCase(),
-              )?.entity_id ??
-              null;
-            if (!entityId) {
-              haResult = {
-                renamed: false,
-                entity_id: null,
-                error:
-                  "Renamed in Zigbee2MQTT, but no Home Assistant entity could be matched to this device. " +
-                  "Pass entity_id explicitly (find it with get_room) and run this again.",
-              };
-            } else {
-              await renameEntity(entityId, friendly);
-              haResult = { renamed: true, entity_id: entityId };
-            }
-          } catch (e) {
-            haResult = {
-              renamed: false,
-              entity_id: explicitEntity ?? null,
-              error:
-                `Renamed in Zigbee2MQTT, but the Home Assistant rename failed: ${(e as Error).message} ` +
-                `The two systems now disagree about this device's name — say so.`,
-            };
-          }
-        }
-
+        const fullyRenamed = z2mResult.renamed && haResult.renamed;
         return {
           data: {
             ieee_address: device.ieee_address,
-            zigbee2mqtt: { renamed: true, from: device.friendly_name, to: friendly, response: z2m },
+            zigbee2mqtt: z2mResult,
             home_assistant: haResult,
-            fully_renamed: haResult.renamed,
-            summary: haResult.renamed
-              ? `Renamed in both Zigbee2MQTT and Home Assistant.`
-              : `Renamed in Zigbee2MQTT ONLY. ${haResult.error}`,
+            fully_renamed: fullyRenamed,
+            summary: renameSummary(z2mResult, haResult, friendly),
           },
           audit: {
-            before: { friendly_name: device.friendly_name },
-            after: { friendly_name: friendly, ha_entity: haResult.entity_id, ha_renamed: haResult.renamed },
+            before: { friendly_name: device.zigbee2mqtt_name, ha_entity: haResult.entity_id },
+            after: {
+              friendly_name: friendly,
+              z2m_renamed: z2mResult.renamed,
+              ha_entity: haResult.entity_id,
+              ha_renamed: haResult.renamed,
+            },
           },
         };
       } catch (e) {
@@ -1362,6 +1374,95 @@ export const TOOLS: ToolDef[] = [
     },
   },
 ];
+
+// ------------------------------------------------------- the two rename halves
+//
+// Split out of `name_device` so each half can fail on its own terms and still
+// be reported. They deliberately return a verdict instead of throwing: an
+// exception from either one would abandon the other, and a device renamed in
+// one system and not the other is the failure the tool exists to surface.
+
+type Z2mRenameResult = {
+  renamed: boolean;
+  /** False means "Zigbee2MQTT never answered", not "it refused". */
+  confirmed: boolean;
+  from: string;
+  to: string;
+  via?: string;
+  response?: unknown;
+  error?: string;
+};
+
+type HaRenameResult = { renamed: boolean; entity_id: string | null; error?: string };
+
+async function renameInZigbee2Mqtt(device: ZigbeeDevice, to: string): Promise<Z2mRenameResult> {
+  const from = device.zigbee2mqtt_name;
+  try {
+    const res = await z2mRequest("device/rename", { from, to });
+    return { renamed: true, confirmed: res.confirmed, from, to, via: res.via, response: res.response };
+  } catch (e) {
+    return {
+      renamed: false,
+      confirmed: false,
+      from,
+      to,
+      error: `The Zigbee2MQTT rename could not be sent: ${(e as Error).message}`,
+    };
+  }
+}
+
+async function renameInHomeAssistant(
+  device: ZigbeeDevice,
+  to: string,
+  explicitEntity?: string,
+): Promise<HaRenameResult> {
+  const entityId = explicitEntity ?? device.primary_entity;
+  if (!entityId) {
+    return {
+      renamed: false,
+      entity_id: null,
+      error:
+        `Home Assistant has no entity registered for ${device.ieee_address}, so there was nothing to ` +
+        `rename there. If the light exists under another device, pass entity_id explicitly (find it ` +
+        `with get_room) and run this again.`,
+    };
+  }
+  try {
+    await renameEntity(entityId, to);
+    return { renamed: true, entity_id: entityId };
+  } catch (e) {
+    return {
+      renamed: false,
+      entity_id: entityId,
+      error: `The Home Assistant rename of ${entityId} failed: ${(e as Error).message}`,
+    };
+  }
+}
+
+/** The one sentence the model repeats. It must never claim more than happened. */
+function renameSummary(z2m: Z2mRenameResult, ha: HaRenameResult, to: string): string {
+  const unconfirmed =
+    z2m.renamed && !z2m.confirmed
+      ? " Zigbee2MQTT's own acknowledgement could not be read — Home Assistant accepted the publish, " +
+        "so treat the mesh rename as sent rather than as verified."
+      : "";
+  if (z2m.renamed && ha.renamed) {
+    return `Renamed to "${to}" in both Zigbee2MQTT and Home Assistant.${unconfirmed}`;
+  }
+  if (z2m.renamed) {
+    return (
+      `Renamed in Zigbee2MQTT ONLY. Home Assistant still calls it something else, so the two systems ` +
+      `now disagree about this device — say so. ${ha.error ?? ""}${unconfirmed}`
+    );
+  }
+  if (ha.renamed) {
+    return (
+      `Renamed in Home Assistant ONLY. The Zigbee mesh still calls it "${z2m.from}", so the two ` +
+      `systems now disagree about this device — say so. ${z2m.error ?? ""}`
+    );
+  }
+  return `NOTHING was renamed; the device is still "${z2m.from}". ${z2m.error ?? ""} ${ha.error ?? ""}`.trim();
+}
 
 /** A human-readable before/after for overwriting a scene. */
 function describeSceneDiff(current: Record<string, unknown>, lamps: Lamp[]): string {

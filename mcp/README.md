@@ -28,24 +28,64 @@ and `mcp_change_proposal`.
 database of its own — it borrows the app's — so **`infra db *` must never target
 it**. Apply migrations against `vue-automation`.
 
-Two exceptions, both structural rather than preference:
-
-- **Zigbee2MQTT** (`list_zigbee_devices`, `start_pairing`, `poll_pairing`, and
-  half of `name_device`) talks to Mosquitto on the Pi directly. The web app has
-  never needed to see the mesh, so there is nothing there to reuse.
-- **The Home Assistant entity registry** (the other half of `name_device`) is
-  WebSocket-only — `config/entity_registry/update` has no REST equivalent at
-  all — and the Next app cannot reach it without taking a WebSocket dependency
-  for a feature it does not have.
+One exception, structural rather than preference: **the Zigbee mesh and the
+Home Assistant registries**, used by `list_zigbee_devices`, `start_pairing`,
+`poll_pairing` and `name_device`. The web app has never needed to see the mesh,
+so there is nothing there to reuse, and the registries are WebSocket-only —
+`config/device_registry/list` and `config/entity_registry/update` have no REST
+equivalent at all, and the Next app cannot reach them without taking a
+WebSocket dependency for a feature it does not have.
 
 ```
 Claude ──HTTPS──► lights-mcp.renatodap.me ──HTTP──► renatodap.me/vue-automation ──tailnet──► HA (Pi)
                           │
-                          └──tailnet──► Mosquitto :1883 (Pi)   [pairing + device rename]
-                          └──tailnet──► HA WebSocket           [entity-registry rename only]
+                          ├──tailnet──► HA WebSocket  [device + entity registries]
+                          ├──tailnet──► HA REST       [mqtt.publish → z2m bridge requests]
+                          └──tailnet──► Mosquitto :1883 (Pi)   [OPTIONAL enrichment only]
 ```
 
 Anthropic's cloud can reach this service. It can never reach the Pi.
+
+## Why Zigbee goes through Home Assistant, not through the broker
+
+This connector used to open its own connection to Mosquitto. It cannot, and the
+reason is permanent rather than a misconfiguration:
+
+- Mosquitto requires credentials. They live in the Mosquitto / Zigbee2MQTT
+  **add-on configuration behind Home Assistant's Supervisor**.
+- A long-lived access token — **including an admin one** — is refused by
+  `/api/hassio/*` with **HTTP 401**. Verified against the live instance.
+- Home Assistant never exposes a config entry's `data` over any API either.
+
+There is no path from the credentials this service *has* to the credentials the
+broker *wants*, so `Connection refused: Not authorized` at boot was the end
+state, and all four device tools were permanently broken.
+
+Home Assistant, however, is **already authenticated to that broker** — the MQTT
+integration owns the connection — and it holds a device registry entry for
+every Zigbee device. So it is the bridge, in both directions:
+
+| Need | Through Home Assistant |
+|---|---|
+| what is joined to the mesh | `config/device_registry/list` — the IEEE address is inside each device's `identifiers`, the z2m friendly name is its `name`, and `config/entity_registry/list` joins the entities on `device_id` |
+| open pairing | `POST /api/services/mqtt/publish` → `zigbee2mqtt/bridge/request/permit_join` |
+| did anything join | a device reaches the registry only **after** its interview finishes, so `start_pairing` snapshots the registry and `poll_pairing` diffs it. No subscription needed. |
+| rename in z2m | `mqtt.publish` → `zigbee2mqtt/bridge/request/device/rename` |
+| rename in HA | `config/entity_registry/update` (unchanged) |
+
+**MQTT is optional enrichment now**, and is expected to be unavailable. When a
+`MQTT_URL` with working credentials *is* present it adds exactly three things:
+live `bridge/event` interview progress on `poll_pairing`, the z2m-only device
+fields (`interview_completed`, `supported`, `power_source`), and confirmation
+of a bridge request published through Home Assistant. Without it those come
+back **null — meaning unknown, not false** — and every tool still works. A
+refused broker costs one log line at boot and is then remembered, so it is not
+re-attempted on every call.
+
+What the HA path genuinely loses is the **return channel**: a publish is
+fire-and-forget, and Zigbee2MQTT answers on `bridge/response/*`, which nobody
+is subscribed to. Results carry `confirmed: false` for that, and the tool copy
+tells the model to describe it as *unconfirmed* rather than as *failed*.
 
 ## Design
 
@@ -83,8 +123,8 @@ Reads (all `readOnlyHint: true`, so a client can auto-approve them):
 | `get_lamp(entity_id)` | one lamp, including the range that bulb can actually tune to |
 | `get_schedules(include_config?)` | automations, enabled state, last fired |
 | `get_history(days)` | tap history: per scene, by hour, most recent |
-| `list_zigbee_devices` | the mesh itself, from `zigbee2mqtt/bridge/devices` |
-| `poll_pairing(since?)` | buffered `device_joined` / `device_interview` events |
+| `list_zigbee_devices` | the mesh itself, from HA's device registry |
+| `poll_pairing(since?)` | devices that appeared since `start_pairing` snapshotted the registry |
 | `list_pending_changes` | proposals awaiting approval — diffs, never tokens |
 | `query_sql(query, max_rows?)` | last-resort read-only SQL over the three metadata tables |
 
@@ -101,7 +141,7 @@ Writes — named mutations with typed arguments, no generic writer:
 | `set_scene_aliases(entity_id, aliases[])` | replaces the set |
 | `set_schedule(name, when, …)` | time or sunrise/sunset offset; pass `id` to edit in place |
 | `set_schedule_enabled(entity_id, enabled)` | pause without deleting |
-| `start_pairing(seconds)` | `permit_join`; returns before anything has joined |
+| `start_pairing(seconds)` | `permit_join` via `mqtt.publish`; snapshots the registry; returns before anything has joined |
 | `name_device(ieee_address, friendly_name, entity_id?)` | renames in **both** systems |
 
 Destructive changes go through **propose → commit**:
@@ -130,8 +170,13 @@ through. Two tool calls with a token in between cannot be skipped by anybody.
   which is why every call to it lives in one adapter in the app.
 - **`name_device`** — Zigbee2MQTT runs with `homeassistant_rename: false`, so
   renaming in z2m does **not** rename the HA entity. This does the z2m rename
-  (`bridge/request/device/rename`) *and* the entity-registry update, and reports
-  `fully_renamed: false` with the reason when only the first half lands.
+  (`bridge/request/device/rename`, published through `mqtt.publish`) *and* the
+  entity-registry update, and reports `fully_renamed: false` with the reason
+  when only one half lands. **Both halves always run**: a failure in the first
+  does not abandon the second, because skipping it would *guarantee* the two
+  systems disagree — the exact outcome the tool exists to prevent. z2m is
+  addressed by `zigbee2mqtt_name` (the device registry's `name`), never by
+  `name_by_user`, which is a Home-Assistant-side override z2m has never heard of.
 
 ## Audit trail
 
@@ -148,8 +193,8 @@ The lights must work when the database does not (invariant #2).
 | Down | What still works |
 |---|---|
 | Postgres | every tool. Labels fall back to HA's names, history reports *unavailable* rather than zero, proposals fall back to memory. Only NEW authorizations are refused; a live token keeps working through a short outage. |
-| MQTT | everything except the four Zigbee tools, which say so plainly. |
-| `HA_BASE_URL`/`HA_TOKEN` unset | everything except the HA half of `name_device`, which reports which half landed. |
+| MQTT | **everything.** This is the expected state. `interview_completed`, `supported`, `power_source` and `bridge_events` come back null (unknown), and bridge requests are reported as unconfirmed rather than as verified. |
+| `HA_BASE_URL`/`HA_TOKEN` unset | scenes, lamps, schedules and history. The four Zigbee tools refuse, naming those variables and pointing at `get_room` for the lights that already exist. |
 | Home Assistant / tailnet | nothing about the house can be read or changed, and the connector says so instead of guessing. |
 
 ## Migrations
@@ -183,7 +228,9 @@ Then:
   `lights-mcp.renatodap.me`.
 - **Env on this app**: `APP_INTERNAL_URL`, `MCP_INTERNAL_SECRET`,
   `DATABASE_URL` (same value as the vue-automation app's), `MCP_PASSPHRASE`,
-  `MQTT_URL`, and optionally `HA_BASE_URL` + `HA_TOKEN`. See `.env.example`.
+  and `HA_BASE_URL` + `HA_TOKEN` (an **admin** token — the registries refuse a
+  non-admin one). `MQTT_URL` is optional enrichment and can be left unset. See
+  `.env.example`.
 - **Env on the vue-automation app**: `MCP_INTERNAL_SECRET`, the **same value**.
   Without it every internal call 401s and every tool fails.
 - `middleware.ts` already lists `/api/internal` under `PUBLIC_PREFIXES` — those
@@ -206,7 +253,13 @@ npm run build && npm test
 ```
 
 The tests need no database, no Home Assistant and no broker: the far side of
-the wire is a controllable fake app (`tests/_fake-app.mjs`), and the 401 path is
-tested precisely in the state where nothing is configured. They cover the 401
-and the discovery chain, propose→commit token handling, and the relaying of a
-partial scene application.
+the wire is a controllable fake app (`tests/_fake-app.mjs`) and a controllable
+fake Home Assistant (`tests/_fake-ha.mjs`, WebSocket registries plus the REST
+service surface on one port), and the 401 path is tested precisely in the state
+where nothing is configured. They cover the 401 and the discovery chain,
+propose→commit token handling, the relaying of a partial scene application, and
+the Zigbee tools in the two states that matter: `MQTT_URL` entirely absent
+(`zigbee-ha.test.mjs`) and `MQTT_URL` set with the broker refusing
+(`mqtt-optional.test.mjs`). `name_device`'s three partial outcomes — z2m only,
+Home Assistant only, neither — each have a test, because a half-done rename
+reported as done is the failure that tool exists to prevent.

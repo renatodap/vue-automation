@@ -18,7 +18,7 @@ import {
   asMetadata, authorizePage, authorizeSubmit, registerClient, resourceMetadata,
   revokeToken, tokenExchange, verifyToken,
 } from "./oauth.js";
-import { ensureConnected, mqttConfigured } from "./mqtt.js";
+import { mqttConfigured, tryConnect } from "./mqtt.js";
 
 const PORT = Number(process.env.PORT || 3000);
 
@@ -288,12 +288,22 @@ const isEntrypoint = process.argv[1] && import.meta.url === `file://${process.ar
 if (isEntrypoint) {
   ensureTables()
     .then(() => {
-      // Start the Zigbee2MQTT subscription eagerly when it is configured: the
-      // bridge event buffer only holds what arrived while connected, and a
-      // pairing event that lands before the first poll would otherwise be lost.
+      // Try the broker once, eagerly, because the bridge-event buffer only
+      // holds what arrived while connected and a pairing event that lands
+      // before the first poll would otherwise be lost.
+      //
+      // It is ENRICHMENT, so a failure is neither an error nor a warning: the
+      // Zigbee tools run through Home Assistant either way. `tryConnect` never
+      // rejects and remembers the failure, so this is at most one line at boot
+      // rather than one per call.
       if (mqttConfigured()) {
-        ensureConnected().catch((e) =>
-          console.warn("[vue-mcp] MQTT not reachable at boot (pairing tools will retry):", e.message));
+        void tryConnect().then((ok) => {
+          if (!ok) {
+            console.log(
+              "[vue-mcp] MQTT enrichment unavailable — the Zigbee tools run through Home Assistant.",
+            );
+          }
+        });
       }
       createApp().listen(PORT, () => console.log(`[vue-mcp] listening on :${PORT}`));
     })

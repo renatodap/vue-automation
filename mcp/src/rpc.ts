@@ -91,12 +91,14 @@ const INSTRUCTIONS =
   "again so the diff is against what is true now.\n\n" +
 
   "ADDING A BULB is a three-step conversation, and the middle step is asynchronous. start_pairing opens " +
-  "the mesh and returns IMMEDIATELY — nothing has joined yet. Tell the user to factory-reset the bulb, " +
-  "then poll_pairing after ~20 seconds and again after that. A `device_joined` event is not a finished " +
-  "pairing: wait for an interview to come back successful. Then name_device, which renames in BOTH " +
-  "Zigbee2MQTT and Home Assistant — renaming in one alone leaves the two systems disagreeing, which is " +
-  "why it is one tool. Name lamps by physical position ('shelf lamp', 'floor lamp'), never by number: " +
-  "`light.lamp_3` is unreadable a month later and every scene references these names.\n\n" +
+  "the mesh and returns IMMEDIATELY — nothing has joined yet — and records which devices Home Assistant " +
+  "already knew. Tell the user to factory-reset the bulb, then poll_pairing after ~20 seconds and again " +
+  "after that. The signal is a device APPEARING in Home Assistant: it only gets there once the Zigbee " +
+  "interview finished, so `appeared` is a finished pairing while a raw `device_joined` bridge event is " +
+  "not. Then name_device, which renames in BOTH Zigbee2MQTT and Home Assistant — renaming in one alone " +
+  "leaves the two systems disagreeing, which is why it is one tool, and it reports `fully_renamed: " +
+  "false` when only one half landed. Name lamps by physical position ('shelf lamp', 'floor lamp'), " +
+  "never by number: `light.lamp_3` is unreadable a month later and every scene references these names.\n\n" +
 
   "WHAT THIS CONNECTOR DOES NOT OWN. Home Assistant owns which scenes exist and what the lamps are " +
   "doing. The app's database only stores labels, accents, ordering, aliases and tap history. If that " +
