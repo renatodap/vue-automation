@@ -180,7 +180,12 @@ export const handler = async (req: IncomingMessage, res: ServerResponse): Promis
     }
 
     // ---- MCP ----
-    if (path === "/mcp") {
+    // A POST to the bare origin is treated as a POST to /mcp. Pasting the root
+    // URL into a connector dialog is the obvious mistake — and the failure it
+    // produced was actively misleading: the root served HTML with a 200, so the
+    // client reported "not a valid MCP server" for a server that was healthy and
+    // correctly configured one path along. GET / still renders the landing page.
+    if (path === "/mcp" || (path === "/" && method === "POST")) {
       // No SSE stream is offered, so don't pretend one exists.
       if (method !== "POST") {
         cors(res);
@@ -257,7 +262,10 @@ export const handler = async (req: IncomingMessage, res: ServerResponse): Promis
         res,
         200,
         "<h1>Living-room lights — MCP</h1>" +
-          "<p>Add this URL as a custom connector in Claude, then authorize with the passphrase.</p>",
+          "<p>Add this as a custom connector in Claude, then authorize with the passphrase:</p>" +
+          `<p><code>${issuer}/mcp</code></p>` +
+          "<p>The bare origin also works — a POST here is handled as a POST to " +
+          "<code>/mcp</code> — but the path is the address to prefer.</p>",
       );
     }
     return json(res, 404, { error: "not_found" });
