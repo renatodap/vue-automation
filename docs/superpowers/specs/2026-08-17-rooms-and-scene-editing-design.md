@@ -99,23 +99,40 @@ falls back to the pre-migration query shape if the column is missing, so
 deploying ahead of the migration costs the spotlight row rather than every label
 and accent in the app.
 
-## The wall remote is scripted, not wired
+## The wall remote, and two bugs it exposed
 
-The Zemismart remote is paired but its four buttons are not bound yet, and this
-session could not bind them: the Pi is reachable only over the tailnet, and the
-connector's schedule tool accepts clock and sun triggers by design.
+The remote is bound and working: buttons 1–4 are Warm 20%, Orange 70%, Bright,
+all off — the physical order originally asked for. The automations live in Home
+Assistant; `homeassistant/bin/bind-remote.sh` rebuilds them.
 
-Widening `/api/automations` to accept a device trigger was considered and
-rejected. That endpoint is deliberately two shapes wide; taking arbitrary
-triggers would make it a general automation writer, which is precisely what
-invariant 8 refuses to hand a model.
+Binding had to happen from the Persimmon server, not from a laptop. The app
+container already holds `HA_TOKEN` and sits on the tailnet, which is the only
+route to the Pi that exists outside the flat. Widening `/api/automations` to
+accept a device trigger was considered and rejected — that endpoint is
+deliberately two shapes wide, and taking arbitrary triggers would make it a
+general automation writer, which invariant 8 refuses.
 
-So the binding is `homeassistant/bin/bind-remote.sh` — one idempotent command,
-run from anything on the tailnet. Buttons top to bottom are Warm 20%, Orange
-70%, Bright, all off, which is the physical order originally asked for.
+**Bug 1: a template comparison that could never be true.** The first automation
+extracted the button digit from the action string and compared it to `'1'`. It
+triggered on all six test presses and did nothing, silently. Home Assistant
+parses template results into native types, so the extracted `'1'` was the
+integer `1`, and `1 == '1'` is false in Python. The lesson generalises: match
+the payload in the TRIGGER with an exact string, and keep templates out of the
+matching path entirely. The remote's real action names — `1_single` … `4_single`
+— were never in doubt once read; they were recovered by logging
+`{{ trigger.payload }}` to the logbook, because persistent notifications stopped
+being entities and cannot be read over REST.
 
-It matches four spellings of each action name rather than one. Zigbee2MQTT's
-naming varies by converter, and this failure is silent: an automation whose
-trigger never matches raises nothing, the light simply never comes on. The
-alternative — HA's own device-trigger wizard — cannot guess wrong because it
-lists the real names, and costs four trips through a UI instead of one command.
+**Bug 2: the strip throws brightness away.** The Tuya strip drops the brightness
+component when brightness and colour temperature arrive in one command — which
+is how a scene applies. Sent alone, it dims instantly. Every scene was therefore
+leaving it at whatever brightness it happened to be on, and it took an
+end-to-end test of the real automation to see it: eight lamps landed correctly
+and the ninth kept its old level while reporting the new colour.
+
+Corrected in all three paths that drive lamps: `applyLightPatches` splits those
+entities into a colour round and a brightness round, `/api/scene` re-reads the
+scene's stored definition and re-sends brightness afterwards, and each remote
+automation follows its scene with a brightness-only command. `SPLIT_BRIGHTNESS`
+in `web/src/lib/ha.ts` is the one list; anything new that drives lamps has to
+respect it.

@@ -50,39 +50,43 @@ when it did not. Re-read a few seconds later instead.
 
 ## The wall remote
 
-A Zemismart 4-button remote, `0x6ce4a4fffe99d9c7` (Home Assistant device id
-`864e487ec5cd7cfd448d8b1c51dcfcdf`). Top to bottom:
+A Zemismart 4-button remote, `0x6ce4a4fffe99d9c7`. **Bound and working.** Top to
+bottom:
 
-| Button | Does |
-|---|---|
-| 1 | `scene.warm_20` |
-| 2 | `scene.orange_70` |
-| 3 | `scene.bright` |
-| 4 | every light off |
+| Button | Action | Does |
+|---|---|---|
+| 1 | `1_single` | `scene.warm_20` |
+| 2 | `2_single` | `scene.orange_70` |
+| 3 | `3_single` | `scene.bright` |
+| 4 | `4_single` | every light off |
 
 Home Assistant only projects the remote's battery, link-quality and voltage —
-there is no action or event entity — so the presses are reachable as MQTT or as
-a device trigger, and neither is something the PWA can author. `/api/automations`
-deliberately speaks clock times and sun offsets only; widening it to take
-arbitrary triggers would turn it into a general automation writer, which is what
-invariant 8 exists to prevent.
+there is no action or event entity — so the presses are reachable only as MQTT
+on `zigbee2mqtt/0x6ce4a4fffe99d9c7`, which the PWA cannot author.
+`/api/automations` deliberately speaks clock times and sun offsets only.
 
-Bind them from anything on the tailnet:
+Rebuild them with `bin/bind-remote.sh` (idempotent, fixed ids). Two traps are
+baked into that script because both cost real debugging:
 
-```
-HA_TOKEN=xxx ./homeassistant/bin/bind-remote.sh
-```
+- **Match the payload in the TRIGGER, not in a condition.** The first attempt
+  pulled the button digit out of the action with a template and compared it to
+  `'1'`. It never fired and never errored — Home Assistant parses template
+  results into native types, so `'1'` was the integer `1`, and `1 == '1'` is
+  false.
+- **The strip needs its brightness sent separately, afterwards.** See below.
 
-The script is idempotent — fixed automation ids, so re-running updates the four
-in place. It matches several spellings of each action (`1_single`,
-`button_1_single`, `1_click`, `1_press`) because Zigbee2MQTT's naming varies by
-converter, and a trigger that never matches fails **silently**: no error, the
-light simply never comes on.
+## The strip throws brightness away
 
-Doing it by hand instead: Settings → Automations → Create → trigger **Device**,
-pick the remote, choose the button, action **Scene: activate**. The UI lists the
-real action names, so it cannot guess wrong — it is four trips through a wizard
-rather than one command.
+The Tuya strip drops the brightness component whenever brightness and colour
+temperature arrive in the SAME command — which is exactly how a scene applies.
+Send brightness on its own and it obeys instantly.
+
+So every scene silently leaves it at whatever brightness it was already on.
+Both paths now correct for it: the remote automations follow each scene with a
+brightness-only command, and `/api/scene` re-reads the scene's stored definition
+and re-sends brightness for any lamp in `SPLIT_BRIGHTNESS` (`web/src/lib/ha.ts`).
+The one-tap looks on Home go through `applyLightPatches`, which splits the same
+way.
 
 ## Migrations
 

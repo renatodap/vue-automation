@@ -457,17 +457,35 @@ export function lightCommand(
 }
 
 /**
- * Apply a batch of per-lamp patches in as few service calls as possible.
+ * Lamps that DROP the brightness component when brightness and colour arrive in
+ * the same command.
  *
- * Grouping matters over a tailnet: four sequential round trips are visibly
- * staggered and the lamps change one at a time, like a wave. Patches that
- * resolve to the same payload — which is every "match all to this" and most
- * undos — collapse into a single call carrying a list of entity ids.
+ * The Tuya RGB+CCT strip does exactly this, and it is not a timing artefact:
+ * send it brightness on its own and it dims instantly; send brightness together
+ * with a colour temperature — which is how every scene and every one-tap look
+ * applies — and it takes the colour while silently keeping its old brightness.
+ * The only fix is a second command carrying brightness alone, afterwards.
+ *
+ * Keyed by entity id rather than sniffed from the model, because the entity id
+ * is what every call site already has.
  */
-export async function applyLightPatches(
+export const SPLIT_BRIGHTNESS = new Set(["light.0xa4c138939b2d0b23"]);
+
+function needsSplitBrightness(patch: LightPatch): boolean {
+  return (
+    SPLIT_BRIGHTNESS.has(patch.entityId) &&
+    patch.brightness !== undefined &&
+    (patch.kelvin !== undefined || patch.hs !== undefined)
+  );
+}
+
+/** Group patches into as few service calls as possible, and fire them. */
+async function sendGrouped(
   patches: LightPatch[],
   ranges: Map<string, LampRange>,
 ): Promise<void> {
+  if (!patches.length) return;
+
   const groups = new Map<string, { service: string; data: Record<string, unknown>; ids: string[] }>();
 
   for (const patch of patches) {
@@ -490,6 +508,39 @@ export async function applyLightPatches(
   const results = await Promise.allSettled(calls);
   const failed = results.find((r) => r.status === "rejected");
   if (failed && failed.status === "rejected") throw failed.reason;
+}
+
+/**
+ * Apply a batch of per-lamp patches in as few service calls as possible.
+ *
+ * Grouping matters over a tailnet: four sequential round trips are visibly
+ * staggered and the lamps change one at a time, like a wave. Patches that
+ * resolve to the same payload — which is every "match all to this" and most
+ * undos — collapse into a single call carrying a list of entity ids.
+ *
+ * The one exception is the split above: those lamps get their colour with
+ * everyone else and their brightness in a second round, because sending both
+ * together means the brightness is thrown away.
+ */
+export async function applyLightPatches(
+  patches: LightPatch[],
+  ranges: Map<string, LampRange>,
+): Promise<void> {
+  const primary: LightPatch[] = [];
+  const followUp: LightPatch[] = [];
+
+  for (const patch of patches) {
+    if (needsSplitBrightness(patch)) {
+      const { brightness, ...colourOnly } = patch;
+      primary.push(colourOnly);
+      followUp.push({ entityId: patch.entityId, brightness });
+    } else {
+      primary.push(patch);
+    }
+  }
+
+  await sendGrouped(primary, ranges);
+  await sendGrouped(followUp, ranges);
 }
 
 /**

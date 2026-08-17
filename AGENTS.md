@@ -63,6 +63,14 @@ cd mcp && npm run build && npm test    # if mcp/ was touched
     calls a change that landed a failure. Verify a write against a FRESH read a
     few seconds later, never against the response to the write itself.
 
+11. **The Tuya strip discards brightness sent alongside colour.** Brightness and
+    a colour temperature in one command — which is how every scene and every
+    one-tap look applies — and it takes the colour and keeps its old brightness.
+    Sent alone, it obeys instantly. `SPLIT_BRIGHTNESS` in `web/src/lib/ha.ts`
+    names the lamps this applies to; `applyLightPatches` and `/api/scene` both
+    send them a second, brightness-only command, and so do the remote's
+    automations. Anything new that drives lamps must do the same.
+
 ## PWA rules that must not be undone
 
 - **Never `100vh`** — it resolves against the largest viewport, so the bottom
