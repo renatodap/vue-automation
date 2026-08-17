@@ -8,7 +8,36 @@ export type SceneView = {
   tapCount: number;
   lastActivated: string | null;
   lastTappedAt: string | null;
+  /** Also shown at the top of Home. False when the metadata db didn't answer. */
+  spotlight: boolean;
 };
+
+/**
+ * One lamp's line in a scene's STORED definition — what the scene will do,
+ * not what the lamp is doing now.
+ *
+ * The distinction is the whole reason the editor reads this rather than the
+ * room: editing a scene by looking at the live lamps means you can only ever
+ * change it to what is already happening.
+ */
+export type SceneLampSetting = {
+  entityId: string;
+  /** The lamp's friendly name, resolved server-side for display. */
+  name: string;
+  on: boolean;
+  /** 1–100. Meaningless when `on` is false, kept so toggling back is lossless. */
+  brightness: number;
+  kelvin: number | null;
+  hs: [number, number] | null;
+};
+
+export type SceneConfigResponse =
+  | { ok: true; id: string; name: string; lamps: SceneLampSetting[] }
+  | {
+      ok: false;
+      reason: "unreachable" | "ha_auth" | "config" | "not_editable" | "unknown";
+      message: string;
+    };
 
 export type LampView = {
   entityId: string;

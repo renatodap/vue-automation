@@ -1,6 +1,6 @@
 # vue-automation — agent context
 
-Home Assistant on a Pi 5 driving four Zigbee bulbs in the living room, plus a
+Home Assistant on a Pi 5 driving nine Zigbee bulbs across two rooms, plus a
 Next.js PWA (`web/`) that presents them as tappable scenes, a SwiftUI app
 (`ios/`), and a Claude MCP connector (`mcp/`, designed in
 `docs/architecture/mcp-connector.md`).
@@ -47,6 +47,21 @@ cd mcp && npm run build && npm test    # if mcp/ was touched
    reason a write is safe. Reads may be broad only where writes are
    *structurally* impossible; Home Assistant offers no such guarantee, so the HA
    side is named tools only.
+
+9. **Room assignment is a static map in `web/src/lib/rooms.ts`.** Home Assistant
+   owns areas but does not expose them over REST, and putting the grouping in
+   Postgres would collapse Home into one undifferentiated list every time the
+   metadata database blinked — the one thing invariant 2 promises cannot take
+   the lights with it. Anything unlisted lands in "Unassigned" rather than
+   vanishing, so a bulb paired at 2am can still be switched off.
+
+10. **Bulbs lie about their range, and answer late.** The Third Reality ZL1
+    advertises a 2000K floor it cannot physically reach: ask for 2000K and it
+    settles at 2202K and reports that back — that IS its warmest white. Only the
+    Tuya strip really reaches 2000. Worse, these bulbs report state lazily, so a
+    read taken a second after a write echoes the OLD value and a naive check
+    calls a change that landed a failure. Verify a write against a FRESH read a
+    few seconds later, never against the response to the write itself.
 
 ## PWA rules that must not be undone
 

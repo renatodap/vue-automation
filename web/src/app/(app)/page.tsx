@@ -1,12 +1,13 @@
-import { RoomMap } from "@/components/room-map";
+import { RoomsPanel } from "@/components/rooms-panel";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The room is the app's front door, as it is in the native app: the fastest
- * possible path from "that lamp is too bright" to the lamp itself is pointing
- * at where it physically is.
+ * Home is the app's front door: the spotlit scenes, then each room and the
+ * bulbs in it. The fastest path from "that lamp is too bright" to the lamp is
+ * a list you can read in one glance, which a photograph of one room stopped
+ * being the moment the house had two.
  */
-export default function RoomPage() {
-  return <RoomMap />;
+export default function HomePage() {
+  return <RoomsPanel />;
 }

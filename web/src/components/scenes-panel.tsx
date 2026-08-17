@@ -1,50 +1,33 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Plus, Power, Sun, Trash2 } from "lucide-react";
-import { apiUrl, postJson } from "@/lib/client";
+import { Pencil, Plus, Star } from "lucide-react";
+import { postJson } from "@/lib/client";
 import type { LampPatch, SceneView } from "@/lib/types";
 import { patchFromLamp, useHouse } from "./house";
-import { Banner, Controls, Disconnected, Section } from "./ui";
+import { SceneEditor } from "./scene-editor";
+import { Disconnected } from "./ui";
 
 /** Hold a scene this long and it becomes a preview instead of a commitment. */
 const PREVIEW_MS = 400;
 
 /**
- * Scenes, and the master control over every lamp at once.
+ * Scenes, and nothing else.
  *
- * Unchanged from the single-screen version of the app beyond being lifted into
- * its own tab: the scene grid, the edit-mode delete, save-current, and the
- * partial-application reporting all behave exactly as they did.
+ * The master lamp controls used to live here; they belong to a room, and Home
+ * now has them per room. What is left is the one question this tab answers:
+ * which scene, and what does it do.
  */
 export function ScenesPanel() {
-  const {
-    state,
-    lamps,
-    reachable,
-    lit,
-    pending,
-    avgBrightness,
-    avgKelvin,
-    minKelvin,
-    maxKelvin,
-    masterHs,
-    load,
-    flash,
-    act,
-    remember,
-    setAll,
-  } = useHouse();
+  const { state, lamps, pending, load, flash, act, remember } = useHouse();
 
   const [saving, setSaving] = useState(false);
-  const [editing, setEditing] = useState(false);
   const [sceneName, setSceneName] = useState("");
   const [previewing, setPreviewing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<SceneView | null>(null);
   /** What the room was before a preview started, so release puts it back. */
   const preview = useRef<{ entityId: string; patches: LampPatch[] } | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const anyOn = lit.length > 0;
 
   const activate = (scene: SceneView) => {
     // Snapshot before, not after: a scene is the most destructive single tap in
@@ -68,8 +51,7 @@ export function ScenesPanel() {
    * Press and hold to try a scene; release to put the room back.
    *
    * Non-committal exploration. Nothing is written that a release does not undo,
-   * so "what does Cinema look like" costs nothing and needs no decision — which
-   * is the difference between five scenes you know and five you never tap.
+   * so "what does Bright look like" costs nothing and needs no decision.
    */
   // Deliberately not memoized: both close over `lamps`, which changes on every
   // poll, and a stale closure here would snapshot a room from six seconds ago
@@ -118,253 +100,144 @@ export function ScenesPanel() {
       flash(`Saved "${sceneName.trim()}" — ${r.captured} lamps captured`);
     });
 
-  const removeScene = (scene: SceneView) => {
-    if (!scene.id) return Promise.resolve();
-    return act(scene.entityId, async () => {
-      const response = await fetch(
-        apiUrl(`/api/scenes?id=${encodeURIComponent(scene.id!)}`),
-        { method: "DELETE" },
-      );
-      if (!response.ok) throw new Error("Couldn't delete that scene");
-      flash(`Deleted ${scene.label}`);
-    });
-  };
-
   if (state && !state.ok) return <Disconnected message={state.message} onRetry={load} />;
   if (!state?.ok) return null;
 
+  if (editing) {
+    // Re-read from the live list so the editor sees a rename or a spotlight
+    // change made on its own previous visit rather than a stale copy.
+    const current = state.scenes.find((s) => s.entityId === editing.entityId) ?? editing;
+    return (
+      <SceneEditor
+        scene={current}
+        onBack={() => setEditing(null)}
+        onChanged={() => void load()}
+      />
+    );
+  }
+
   return (
-    <div className="panels">
-      <div className="flex flex-col gap-4 min-w-0">
-        {state.unreachableCount > 0 && (
-          <Banner>
-            {state.unreachableCount === 1
-              ? "1 lamp unreachable — check its switch."
-              : `${state.unreachableCount} lamps unreachable — check their switches.`}
-          </Banner>
-        )}
-
-        <Section
-          title="Scenes"
-          action={
-            state.scenes.some((s) => s.id) && !saving ? (
-              <button
-                onClick={() => setEditing((v) => !v)}
-                className="text-[12px] font-medium px-2 rounded-[var(--r-sm)]"
-                style={{
-                  minHeight: 28,
-                  color: editing ? "var(--accent)" : "var(--text-muted)",
-                  background: editing ? "var(--accent-subtle)" : "transparent",
-                }}
-              >
-                {editing ? "Done" : "Edit"}
-              </button>
-            ) : null
-          }
-        >
-          <div className="grid grid-cols-2 gap-2">
-            {state.scenes.map((s) => (
-              <div key={s.entityId} className="relative">
-                <button
-                  // Pointer events rather than onClick: a tap applies the
-                  // scene, a hold previews it and the release puts the room
-                  // back. Capture so the release is heard even if the thumb
-                  // slid off the button.
-                  onPointerDown={(e) => {
-                    e.currentTarget.setPointerCapture(e.pointerId);
-                    startHold(s);
-                  }}
-                  onPointerUp={() => endHold(s)}
-                  onPointerCancel={() => endHold(s, false)}
-                  // Pointer events skip the keyboard entirely, and this is the
-                  // app's primary control — it has to work from a keyboard.
-                  onKeyUp={(e) => {
-                    if (e.key === "Enter" || e.key === " ") void activate(s);
-                  }}
-                  disabled={pending === s.entityId}
-                  className="w-full flex items-center gap-2 px-3 rounded-[var(--r-md)] text-left transition-all active:scale-[0.97]"
-                  style={{
-                    minHeight: 52,
-                    paddingRight: editing ? 34 : 12,
-                    background: "var(--surface)",
-                    border: `1px solid ${previewing === s.entityId ? "var(--accent)" : "var(--border)"}`,
-                    boxShadow:
-                      pending === s.entityId || previewing === s.entityId
-                        ? "var(--glow-accent)"
-                        : "none",
-                  }}
-                >
-                  <span
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{ background: s.accent ?? "var(--accent)" }}
-                  />
-                  <span className="text-[14px] font-medium leading-tight break-words">
-                    {s.label}
-                  </span>
-                </button>
-                {/* Delete only appears in edit mode. A destructive control
-                    permanently next to the one you tap in the dark is how
-                    scenes get lost. */}
-                {editing && s.id && (
-                  <button
-                    onClick={() => void removeScene(s)}
-                    aria-label={`Delete ${s.label}`}
-                    className="absolute top-1 right-1 rounded-[var(--r-sm)]"
-                    style={{
-                      minHeight: 28,
-                      minWidth: 28,
-                      color: "var(--negative)",
-                      background: "var(--negative-bg)",
-                    }}
-                  >
-                    <Trash2 size={13} className="mx-auto" />
-                  </button>
-                )}
-              </div>
-            ))}
-
-            {saving ? (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void saveCurrent();
-                }}
-                className="col-span-2 flex gap-2"
-              >
-                <input
-                  value={sceneName}
-                  onChange={(e) => setSceneName(e.target.value)}
-                  placeholder="Scene name"
-                  aria-label="Scene name"
-                  autoFocus
-                  style={{ minHeight: 44 }}
-                />
-                <button
-                  type="submit"
-                  disabled={!sceneName.trim() || pending === "save"}
-                  className="px-4 rounded-[var(--r-md)] text-[14px] font-medium shrink-0 disabled:opacity-40"
-                  style={{
-                    minHeight: 44,
-                    background: "var(--accent)",
-                    color: "var(--text-on-accent)",
-                  }}
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSaving(false);
-                    setSceneName("");
-                  }}
-                  className="px-3 rounded-[var(--r-md)] text-[14px] shrink-0"
-                  style={{ minHeight: 44, color: "var(--text-muted)" }}
-                >
-                  Cancel
-                </button>
-              </form>
-            ) : (
-              <button
-                onClick={() => setSaving(true)}
-                className="flex items-center justify-center gap-1.5 rounded-[var(--r-md)] text-[13px] font-medium"
-                style={{
-                  minHeight: 52,
-                  background: "transparent",
-                  border: "1px dashed var(--border-strong)",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                <Plus size={15} /> Save current
-              </button>
-            )}
-          </div>
-
-          {state.scenes.length > 0 && (
-            <p className="text-[12px] text-[var(--text-muted)] m-0 mt-2">
-              Hold a scene to try it — the room goes back when you let go.
-            </p>
-          )}
-        </Section>
-      </div>
-
-      {/* Master. This is the section that removes the most work: warming or
-          dimming the whole room used to mean opening four lamps. */}
-      <div className="min-w-0">
-        <Section title="All lamps">
-          <div
-            className="rounded-[var(--r-md)] p-3 flex flex-col gap-3.5"
-            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+    <div className="grid grid-cols-2 gap-2">
+      {state.scenes.map((s) => (
+        <div key={s.entityId} className="relative">
+          <button
+            // Pointer events rather than onClick: a tap applies the scene, a
+            // hold previews it and the release puts the room back. Capture so
+            // the release is heard even if the thumb slid off the button.
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              startHold(s);
+            }}
+            onPointerUp={() => endHold(s)}
+            onPointerCancel={() => endHold(s, false)}
+            // Pointer events skip the keyboard entirely, and this is the app's
+            // primary control — it has to work from a keyboard.
+            onKeyUp={(e) => {
+              if (e.key === "Enter" || e.key === " ") void activate(s);
+            }}
+            disabled={pending === s.entityId}
+            className="w-full flex items-center gap-2 pl-3 rounded-[var(--r-md)] text-left transition-all active:scale-[0.97]"
+            style={{
+              minHeight: 56,
+              paddingRight: 40,
+              background: "var(--surface)",
+              border: `1px solid ${previewing === s.entityId ? "var(--accent)" : "var(--border)"}`,
+              boxShadow:
+                pending === s.entityId || previewing === s.entityId
+                  ? "var(--glow-accent)"
+                  : "none",
+            }}
           >
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => {
-                  remember("all lamps");
-                  void setAll({ on: true, brightness: avgBrightness });
-                }}
-                disabled={pending === "master" || !reachable.length}
-                className="flex items-center justify-center gap-1.5 rounded-[var(--r-sm)] text-[14px] font-medium disabled:opacity-35"
-                style={{
-                  minHeight: 44,
-                  background: anyOn ? "var(--accent-subtle)" : "var(--accent)",
-                  color: anyOn ? "var(--accent)" : "var(--text-on-accent)",
-                  border: "1px solid var(--accent-border)",
-                }}
-              >
-                <Sun size={15} /> All on
-              </button>
-              <button
-                onClick={() => {
-                  remember("all lamps");
-                  void setAll({ on: false });
-                }}
-                disabled={pending === "master" || !anyOn}
-                className="flex items-center justify-center gap-1.5 rounded-[var(--r-sm)] text-[14px] font-medium disabled:opacity-35"
-                style={{
-                  minHeight: 44,
-                  background: "var(--neutral-bg)",
-                  color: "var(--neutral-fg)",
-                  border: "1px solid var(--border)",
-                }}
-              >
-                <Power size={15} /> All off
-              </button>
-            </div>
-
-            <Controls
-              idPrefix="All lamps"
-              brightness={avgBrightness}
-              kelvin={avgKelvin}
-              minKelvin={minKelvin}
-              maxKelvin={maxKelvin}
-              hs={masterHs}
-              supportsColor={reachable.some((l) => l.supportsColor)}
-              inColorMode={lit.length > 0 && lit.every((l) => l.colorMode !== "color_temp")}
-              disabled={!reachable.length}
-              // These are the absolute masters — every lamp to one value. They
-              // flatten a scene by design, which is exactly why each one arms
-              // undo before it fires.
-              onBrightness={(v) => {
-                remember("all lamps");
-                void setAll({ brightness: v });
-              }}
-              onKelvin={(v) => {
-                remember("all lamps");
-                void setAll({ kelvin: v });
-              }}
-              onHs={(v) => {
-                remember("all lamps");
-                void setAll({ hs: v });
-              }}
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ background: s.accent ?? "var(--accent)" }}
             />
-          </div>
-        </Section>
+            <span className="min-w-0">
+              <span className="block text-[14px] font-medium leading-tight break-words">
+                {s.label}
+              </span>
+              {s.spotlight && (
+                <span className="flex items-center gap-1 text-[11px] text-[var(--text-muted)] mt-0.5">
+                  <Star size={10} fill="currentColor" /> On Home
+                </span>
+              )}
+            </span>
+          </button>
 
-        {lamps.length === 0 && (
-          <p className="text-[12px] text-[var(--text-muted)] mt-2">
-            No lamps paired yet — pair them in Zigbee2MQTT and they appear here.
-          </p>
-        )}
-      </div>
+          {/* Opens the scene itself — rename, per-lamp settings, spotlight,
+              delete. Separate from the card so a tap in the dark still just
+              turns the lights on. */}
+          <button
+            onClick={() => setEditing(s)}
+            aria-label={`Edit ${s.label}`}
+            className="absolute top-0 right-0 flex items-center justify-center rounded-[var(--r-md)] text-[var(--text-muted)] active:scale-90 transition-transform"
+            style={{ minHeight: 40, minWidth: 38 }}
+          >
+            <Pencil size={14} />
+          </button>
+        </div>
+      ))}
+
+      {saving ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void saveCurrent();
+          }}
+          className="col-span-2 flex gap-2"
+        >
+          <input
+            value={sceneName}
+            onChange={(e) => setSceneName(e.target.value)}
+            placeholder="Scene name"
+            aria-label="Scene name"
+            autoFocus
+            style={{ minHeight: 44 }}
+          />
+          <button
+            type="submit"
+            disabled={!sceneName.trim() || pending === "save"}
+            className="px-4 rounded-[var(--r-md)] text-[14px] font-medium shrink-0 disabled:opacity-40"
+            style={{
+              minHeight: 44,
+              background: "var(--accent)",
+              color: "var(--text-on-accent)",
+            }}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSaving(false);
+              setSceneName("");
+            }}
+            className="px-3 rounded-[var(--r-md)] text-[14px] shrink-0"
+            style={{ minHeight: 44, color: "var(--text-muted)" }}
+          >
+            Cancel
+          </button>
+        </form>
+      ) : (
+        <button
+          onClick={() => setSaving(true)}
+          className="flex items-center justify-center gap-1.5 rounded-[var(--r-md)] text-[13px] font-medium"
+          style={{
+            minHeight: 56,
+            background: "transparent",
+            border: "1px dashed var(--border-strong)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          <Plus size={15} /> Save current
+        </button>
+      )}
+
+      {state.scenes.length > 0 && (
+        <p className="col-span-2 text-[12px] text-[var(--text-muted)] m-0 mt-1">
+          Hold a scene to try it — the room goes back when you let go.
+        </p>
+      )}
     </div>
   );
 }

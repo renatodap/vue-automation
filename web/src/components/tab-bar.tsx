@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Clock, LayoutGrid, Lightbulb, Sofa } from "lucide-react";
+import { Clock, House, LayoutGrid, Lightbulb } from "lucide-react";
 
 /**
  * The app's third grid row.
@@ -17,7 +17,7 @@ import { Clock, LayoutGrid, Lightbulb, Sofa } from "lucide-react";
  * comparisons below are both written as if the app owned the domain root.
  */
 const TABS = [
-  { href: "/", label: "Room", Icon: Sofa },
+  { href: "/", label: "Home", Icon: House },
   { href: "/scenes", label: "Scenes", Icon: LayoutGrid },
   { href: "/schedules", label: "Schedules", Icon: Clock },
   { href: "/devices", label: "Devices", Icon: Lightbulb },

@@ -110,6 +110,88 @@ export async function deleteScene(id: string): Promise<void> {
   });
 }
 
+export type SceneConfig = {
+  id?: string;
+  name?: string;
+  entities: Record<string, Record<string, unknown>>;
+};
+
+/**
+ * A scene's STORED definition — what it will do, not what the room is doing.
+ *
+ * This is the read the editor is built on. Editing a scene by looking at the
+ * live lamps can only ever change it to what is already happening, which makes
+ * "turn this scene's strip up" impossible without first turning the strip up.
+ */
+export async function getSceneConfig(id: string): Promise<SceneConfig> {
+  const raw = await haFetch<SceneConfig>(
+    `/api/config/scene/config/${encodeURIComponent(id)}`,
+  );
+  return { ...raw, entities: raw.entities ?? {} };
+}
+
+/**
+ * One lamp's line in a scene, in the shape the editor renders.
+ *
+ * `brightness` comes back 0–255 from Home Assistant and goes out 1–100, the
+ * same conversion toLamps does, so the editor's sliders and the Devices tab's
+ * sliders are showing the same units.
+ */
+export type SceneLamp = {
+  entityId: string;
+  name: string;
+  on: boolean;
+  brightness: number;
+  kelvin: number | null;
+  hs: [number, number] | null;
+};
+
+export function sceneLamps(config: SceneConfig, lamps: Lamp[]): SceneLamp[] {
+  const named = new Map(lamps.map((l) => [l.entityId, l.name]));
+
+  return Object.entries(config.entities)
+    .filter(([entityId]) => entityId.startsWith("light."))
+    .map(([entityId, entry]) => {
+      const raw = entry["brightness"];
+      const kelvin = entry["color_temp_kelvin"];
+      const hs = entry["hs_color"];
+      return {
+        entityId,
+        // A scene can name a lamp that has since been unpaired; the entity id
+        // is a worse label than a name but far better than dropping the row and
+        // silently rewriting the scene without it on the next save.
+        name: named.get(entityId) ?? entityId.replace(/^light\./, ""),
+        on: entry["state"] !== "off",
+        brightness: typeof raw === "number" ? Math.round((raw / 255) * 100) : 100,
+        kelvin: typeof kelvin === "number" ? kelvin : null,
+        hs:
+          Array.isArray(hs) && hs.length === 2 ? ([hs[0], hs[1]] as [number, number]) : null,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The inverse — the editor's rows back into what scenes.yaml stores. */
+export function sceneEntities(lamps: SceneLamp[]): Record<string, Record<string, unknown>> {
+  const entities: Record<string, Record<string, unknown>> = {};
+  for (const lamp of lamps) {
+    if (!lamp.on) {
+      entities[lamp.entityId] = { state: "off" };
+      continue;
+    }
+    const entry: Record<string, unknown> = {
+      state: "on",
+      brightness: Math.round((Math.max(1, Math.min(100, lamp.brightness)) / 100) * 255),
+    };
+    // Exactly one colour key, as everywhere else: a scene carrying both lets
+    // Home Assistant pick which wins and the room comes back subtly wrong.
+    if (lamp.hs) entry.hs_color = lamp.hs;
+    else if (lamp.kelvin) entry.color_temp_kelvin = lamp.kelvin;
+    entities[lamp.entityId] = entry;
+  }
+  return entities;
+}
+
 /**
  * Snapshot what the lamps are doing right now, in the shape a scene wants.
  *

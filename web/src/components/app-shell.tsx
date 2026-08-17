@@ -33,7 +33,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="app">
       <header className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-[25px] font-semibold tracking-tight m-0">Living Room</h1>
+          <h1 className="text-[25px] font-semibold tracking-tight m-0">Home</h1>
           <p className="text-[13px] text-[var(--text-muted)] m-0 mt-0.5 truncate">
             {state === null ? "Connecting…" : state.ok ? summarize(lamps) : "Disconnected"}
           </p>

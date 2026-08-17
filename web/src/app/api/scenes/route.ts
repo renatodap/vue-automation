@@ -6,6 +6,7 @@ import {
   snapshotForScene,
   toLamps,
 } from "@/lib/ha";
+import { forgetScene } from "@/lib/db";
 import { errorResponse } from "../state/route";
 
 export const dynamic = "force-dynamic";
@@ -72,9 +73,15 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("id");
+  const entityId = request.nextUrl.searchParams.get("entityId");
   if (!id) return NextResponse.json({ error: "missing id" }, { status: 400 });
   try {
     await deleteScene(id);
+    // Home Assistant is the half that decides the scene is gone, so this runs
+    // after and never blocks the delete. Leaving the row behind would let a
+    // stale label and spotlight flag attach themselves to whatever scene next
+    // claims that entity id.
+    if (entityId) await forgetScene(entityId);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return errorResponse(error);

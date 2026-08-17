@@ -17,10 +17,11 @@ import { Controls, Disconnected, Empty, Section } from "./ui";
 /**
  * Every bulb, and what it is actually doing.
  *
- * The Room tab answers "is the room right"; this one answers "what is this
- * bulb". That means the numbers the map deliberately hides — the reported
- * tunable range, the colour mode the bulb is holding, the entity id — belong
- * here, where someone is diagnosing rather than lighting a room.
+ * Home answers "is the room right"; this tab answers "what is this bulb". The
+ * diagnostics that distinction implies — the reported tunable range, the colour
+ * mode, the entity id — are one line at the bottom of an opened lamp rather
+ * than six chips under every closed one. Six chips × nine bulbs is a screen of
+ * facts nobody is reading on the way to a light switch.
  */
 export function DevicesPanel() {
   const { state, lamps, pending, load, setLamp, solo, copyTo } = useHouse();
@@ -32,7 +33,7 @@ export function DevicesPanel() {
 
   return (
     <Section title={`Lamps (${lamps.length})`}>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1.5">
         {state?.ok && lamps.length === 0 && (
           <Empty
             title="No lamps paired yet."
@@ -109,31 +110,27 @@ function LampRow({
         opacity: lamp.reachable ? 1 : 0.72,
       }}
     >
-      <div className="flex items-center gap-2 p-2.5">
+      <div className="flex items-center gap-2 px-2.5 py-1.5">
         <button
           onClick={onToggle}
           disabled={!lamp.reachable || busy}
           aria-label={lamp.on ? `Turn off ${lamp.name}` : `Turn on ${lamp.name}`}
           className="shrink-0 active:scale-90 transition-transform"
           style={{
-            minWidth: 44,
+            minWidth: 40,
             // The icon carries the bulb's real colour when it is lit, so the
-            // list reads at a glance the same way the map does.
-            color: lamp.reachable
-              ? lamp.on
-                ? lampCss(lamp)
-                : "var(--text-muted)"
-              : "var(--text-muted)",
+            // list reads at a glance.
+            color: lamp.reachable && lamp.on ? lampCss(lamp) : "var(--text-muted)",
           }}
         >
           {lamp.reachable ? (
             lamp.on ? (
-              <Lightbulb size={19} />
+              <Lightbulb size={18} />
             ) : (
-              <LightbulbOff size={19} />
+              <LightbulbOff size={18} />
             )
           ) : (
-            <WifiOff size={19} />
+            <WifiOff size={18} />
           )}
         </button>
 
@@ -142,15 +139,15 @@ function LampRow({
           disabled={!canAdjust}
           aria-expanded={open}
           className="min-w-0 flex-1 text-left disabled:cursor-default"
-          style={{ minHeight: 40 }}
+          style={{ minHeight: 38 }}
         >
           {/* Never truncate a device name — wrap instead. */}
-          <div className="text-[14px] leading-tight break-words">{lamp.name}</div>
-          <div className="text-[12px] text-[var(--text-muted)]">
+          <div className="text-[13px] leading-tight break-words">{lamp.name}</div>
+          <div className="text-[11px] text-[var(--text-muted)] leading-tight">
             {!lamp.reachable
               ? "No power at the lamp — check its switch"
               : lamp.on
-                ? `${lamp.brightness ?? 100}% · ${lamp.kelvin ? `${lamp.kelvin}K` : "colour"}`
+                ? `${lamp.brightness ?? 100}% · ${lamp.kelvin && lamp.colorMode === "color_temp" ? `${lamp.kelvin}K` : "colour"}`
                 : "Off"}
           </div>
         </button>
@@ -164,32 +161,8 @@ function LampRow({
         )}
       </div>
 
-      <div className="px-2.5 pb-2.5 flex flex-wrap gap-1.5">
-        <Tag tone={lamp.reachable ? "ok" : "bad"}>
-          {lamp.reachable ? "Reachable" : "Unreachable"}
-        </Tag>
-        {/* The bulb's OWN reported envelope. Hardcoding 2700–6500 here would be
-            a lie about a bulb that reports something else, and asking a lamp
-            for a value outside its range fails silently — the light simply does
-            not move, which reads as the app being broken. */}
-        <Tag>
-          {lamp.minKelvin}–{lamp.maxKelvin} K
-        </Tag>
-        <Tag>{lamp.supportsColor ? "White + colour" : "White only"}</Tag>
-        {lamp.reachable && lamp.on && lamp.colorMode && (
-          <Tag>mode: {lamp.colorMode}</Tag>
-        )}
-        {lamp.reachable && lamp.effect && <Tag tone="ok">effect: {lamp.effect}</Tag>}
-        {lamp.reachable && lamp.on && lamp.hs && (
-          <Tag>
-            {Math.round(lamp.hs[0])}° · {Math.round(lamp.hs[1])}%
-          </Tag>
-        )}
-        <Tag mono>{lamp.entityId}</Tag>
-      </div>
-
       {open && canAdjust && (
-        <div className="px-3 pb-3">
+        <div className="px-2.5 pb-2.5 flex flex-col gap-2.5">
           <Controls
             idPrefix={lamp.name}
             brightness={lamp.brightness ?? 100}
@@ -204,40 +177,39 @@ function LampRow({
             onHs={onHs}
           />
 
+          {/* One scrolling row rather than a wrapping block. Eight effects wrap
+              to three rows on a phone, which is taller than every control above
+              it for a feature almost nobody opens this tab to use. */}
           {lamp.effects.length > 0 && (
-            <div className="mt-3">
-              <div className="text-[12px] text-[var(--text-secondary)] mb-1.5">Effects</div>
-              <div className="flex gap-1.5 flex-wrap">
-                {lamp.effects.map((effect) => (
-                  <button
-                    key={effect}
-                    onClick={() => onEffect(effect)}
-                    className="rounded-[var(--r-pill)] text-[12px] font-medium px-2.5"
-                    style={{
-                      minHeight: 30,
-                      background:
-                        lamp.effect === effect
-                          ? "var(--accent-subtle)"
-                          : "var(--surface-sunken)",
-                      color: lamp.effect === effect ? "var(--accent)" : "var(--text-muted)",
-                      border: `1px solid ${lamp.effect === effect ? "var(--accent-border)" : "transparent"}`,
-                    }}
-                  >
-                    {effect.replace(/_/g, " ")}
-                  </button>
-                ))}
-              </div>
+            <div className="hscroll flex gap-1.5">
+              {lamp.effects.map((effect) => (
+                <button
+                  key={effect}
+                  onClick={() => onEffect(effect)}
+                  className="rounded-[var(--r-pill)] text-[12px] font-medium px-2.5 shrink-0"
+                  style={{
+                    minHeight: 32,
+                    background:
+                      lamp.effect === effect
+                        ? "var(--accent-subtle)"
+                        : "var(--surface-sunken)",
+                    color: lamp.effect === effect ? "var(--accent)" : "var(--text-muted)",
+                    border: `1px solid ${lamp.effect === effect ? "var(--accent-border)" : "transparent"}`,
+                  }}
+                >
+                  {effect.replace(/_/g, " ")}
+                </button>
+              ))}
             </div>
           )}
 
-          {/* The list's answer to dragging one lamp onto another. */}
-          <div className="grid grid-cols-2 gap-1.5 mt-3">
+          <div className="grid grid-cols-2 gap-1.5">
             <button
               onClick={onSolo}
               disabled={!hasOthers}
               className="flex items-center justify-center gap-1.5 rounded-[var(--r-sm)] text-[12px] font-medium disabled:opacity-35"
               style={{
-                minHeight: 44,
+                minHeight: 38,
                 background: "var(--surface-sunken)",
                 color: "var(--text-secondary)",
                 border: "1px solid var(--border)",
@@ -250,50 +222,35 @@ function LampRow({
               disabled={!hasOthers}
               className="flex items-center justify-center gap-1.5 rounded-[var(--r-sm)] text-[12px] font-medium disabled:opacity-35"
               style={{
-                minHeight: 44,
+                minHeight: 38,
                 background: "var(--surface-sunken)",
                 color: "var(--text-secondary)",
                 border: "1px solid var(--border)",
               }}
             >
-              <ChevronsLeftRight size={14} /> Match all to this
+              <ChevronsLeftRight size={14} /> Match all
             </button>
           </div>
+
+          {/* The diagnostics, once, at the bottom of the one lamp being looked
+              at. The kelvin range is the bulb's OWN reported envelope: asking a
+              lamp for a value outside it fails silently — the light does not
+              move, which reads as the app being broken. */}
+          <p
+            className="text-[11px] m-0 break-all"
+            style={{
+              color: "var(--text-muted)",
+              userSelect: "text",
+              WebkitUserSelect: "text",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            }}
+          >
+            {lamp.minKelvin}–{lamp.maxKelvin}K ·{" "}
+            {lamp.supportsColor ? "white + colour" : "white only"} ·{" "}
+            {lamp.colorMode ?? "off"} · {lamp.entityId}
+          </p>
         </div>
       )}
     </div>
-  );
-}
-
-function Tag({
-  children,
-  tone = "neutral",
-  mono,
-}: {
-  children: React.ReactNode;
-  tone?: "neutral" | "ok" | "bad";
-  mono?: boolean;
-}) {
-  const palette = {
-    neutral: { bg: "var(--surface-sunken)", fg: "var(--text-muted)" },
-    ok: { bg: "var(--positive-bg)", fg: "var(--positive)" },
-    bad: { bg: "var(--negative-bg)", fg: "var(--negative)" },
-  }[tone];
-
-  return (
-    <span
-      className="text-[11px] px-1.5 py-0.5 rounded-[var(--r-sm)] break-all"
-      style={{
-        background: palette.bg,
-        color: palette.fg,
-        fontFamily: mono ? "ui-monospace, SFMono-Regular, Menlo, monospace" : undefined,
-        // Chrome is un-selectable app furniture; an entity id is content, and
-        // copying one into Home Assistant is a real workflow.
-        userSelect: "text",
-        WebkitUserSelect: "text",
-      }}
-    >
-      {children}
-    </span>
   );
 }

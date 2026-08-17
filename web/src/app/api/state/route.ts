@@ -32,6 +32,9 @@ export async function GET() {
         label: m?.label ?? scene.name,
         accent: m?.accent ?? null,
         sortOrder: m?.sortOrder ?? null,
+        // Absent metadata means no spotlight rather than every scene in it —
+        // a database outage must not fill the top of Home with ten buttons.
+        spotlight: m?.spotlight ?? false,
         tapCount: m?.tapCount ?? 0,
         lastTappedAt: m?.lastTappedAt ?? null,
       };

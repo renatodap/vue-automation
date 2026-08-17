@@ -1,11 +1,11 @@
 # vue-automation
 
-Lighting control for the living room: Home Assistant on a Raspberry Pi 5
-driving four Zigbee bulbs, and a phone-first PWA that turns the whole thing
-into five tappable scenes.
+Lighting control for the flat: Home Assistant on a Raspberry Pi 5 driving nine
+Zigbee bulbs across the living room and the bedroom, and a phone-first PWA that
+turns the whole thing into a room list and a handful of tappable scenes.
 
 ```
-web/             Next.js 16 PWA — the scene picker
+web/             Next.js 16 PWA — rooms, scenes, schedules, devices
 ios/             SwiftUI app — scenes, the room map, and user-defined Siri phrases
 mcp/             Claude MCP connector (lights-mcp.renatodap.me) — see docs/architecture
 homeassistant/   Versioned HA scenes + SQL migrations for the PWA's database

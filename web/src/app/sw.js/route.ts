@@ -23,7 +23,11 @@ export async function GET() {
   // v3: the room plate joined the precache. It is a static picture of the
   // furniture with no lamp, no fixture and no glow in it — every state-bearing
   // pixel is drawn live on top — so caching it can never show a stale light.
-  const version = "v3";
+  //
+  // v4: the room map is gone and Home is a list, so the plate went with it.
+  // The bump matters more than the removed entry: without it every installed
+  // device keeps serving a precache that still expects a picture.
+  const version = "v4";
 
   const body = `
 const CACHE = 'vue-lights-${version}';
@@ -34,9 +38,6 @@ const SHELL = [
   BASE + '/icon-192.png',
   BASE + '/icon-512.png',
   BASE + '/apple-touch-icon.png',
-  // The room map's background. Shell, not data: no light state is baked into
-  // it, and the Room tab is the app's front door.
-  BASE + '/room-plate-dark.png',
 ];
 
 self.addEventListener('install', (event) => {
