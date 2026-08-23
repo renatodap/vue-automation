@@ -56,6 +56,13 @@ export type LampView = {
   effects: string[];
   /** The effect it is running, null when idle. */
   effect: string | null;
+  /**
+   * The room, already resolved by the state route (override, then the static
+   * map). Optional and typed as a plain string on purpose: it arrives as JSON,
+   * so `isRoomId` narrows it, and a lamp that reaches the client without one
+   * still groups via the compiled-in map.
+   */
+  room?: string;
 };
 
 /** One lamp's settings, in the shape that reproduces them. */

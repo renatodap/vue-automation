@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStates, toAutomations, toLamps, toScenes } from "@/lib/ha";
-import { db, loadSceneMeta } from "@/lib/db";
+import { db, loadRoomOverrides, loadSceneMeta } from "@/lib/db";
+import { ROOMS, roomOf } from "@/lib/rooms";
 import { internalSecretOk, unauthorized } from "../_lib/guard";
 import { internalError } from "../_lib/errors";
 import { loadAliases } from "../_lib/scene-meta";
@@ -22,14 +23,20 @@ export async function GET(req: Request): Promise<Response> {
   if (!internalSecretOk(req)) return unauthorized();
 
   try {
-    const [states, meta, aliases, metaOnline] = await Promise.all([
+    const [states, meta, aliases, roomOverrides, metaOnline] = await Promise.all([
       getStates(),
       loadSceneMeta(),
       loadAliases(),
+      loadRoomOverrides(),
       metadataReachable(),
     ]);
 
-    const lamps = toLamps(states);
+    // Resolved the same way and in the same order as /api/state, so the room
+    // the connector names and the room the picker draws are the same room.
+    const lamps = toLamps(states).map((lamp) => ({
+      ...lamp,
+      room: roomOf(lamp.entityId, roomOverrides),
+    }));
     const scenes = toScenes(states).map((scene) => {
       const m = meta.get(scene.entityId);
       return {
@@ -61,6 +68,11 @@ export async function GET(req: Request): Promise<Response> {
       lamps,
       automations: toAutomations(states),
       unreachableCount: lamps.filter((l) => !l.reachable).length,
+      // The rooms that exist, so a caller can offer the real set rather than
+      // guess one, and the overrides that are currently shadowing the static
+      // map — an empty object means "none set", or that Postgres was down.
+      rooms: ROOMS,
+      room_overrides: roomOverrides,
       // Says which of the two stores answered. A scene list whose labels all
       // fell back to Home Assistant's names is not the same thing as a scene
       // list whose labels were cleared, and the caller has to be able to tell.

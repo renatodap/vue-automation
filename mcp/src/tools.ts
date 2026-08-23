@@ -155,9 +155,12 @@ export const TOOLS: ToolDef[] = [
     name: "get_room",
     title: "The lamps, right now",
     description:
-      "Every lamp in the living room as Home Assistant reports it THIS SECOND: on/off, brightness, " +
-      "colour temperature or hue, the bulb's own tunable Kelvin range, and — the field that matters " +
-      "most — whether it is reachable at all.\n\n" +
+      "Every lamp in the house as Home Assistant reports it THIS SECOND: on/off, brightness, " +
+      "colour temperature or hue, the bulb's own tunable Kelvin range, the room it is grouped under, " +
+      "and — the field that matters most — whether it is reachable at all.\n\n" +
+      "`rooms` lists the rooms that exist, and each lamp carries a `room`. A lamp in \"unassigned\" is " +
+      "one the app has no room for — usually a bulb paired after the app was last built. It still works " +
+      "and can still be switched; set_lamp_room is how it gets a home.\n\n" +
       "CALL THIS BEFORE ANSWERING ANYTHING ABOUT THE LIGHTS. You have no memory of the room: someone " +
       "flips a wall switch, an automation fires, another phone taps a scene. A reading from earlier in " +
       "the conversation is not evidence about now, and stating it as current is worse than saying you " +
@@ -174,6 +177,7 @@ export const TOOLS: ToolDef[] = [
           data: {
             read_at: state.read_at,
             lamps: state.lamps,
+            rooms: state.rooms ?? [],
             unreachable: state.lamps.filter((l) => !l.reachable).map((l) => l.name),
             all_reachable: state.unreachableCount === 0,
             note: freshness(state.read_at),
@@ -722,6 +726,55 @@ export const TOOLS: ToolDef[] = [
         if (!scene) throw sceneNotFound(before.scenes, needle);
         const out = await api.sceneMeta({ action: "aliases", entity_id: scene.entityId, aliases });
         return { data: out, audit: { before: { aliases: scene.aliases }, after: { aliases } } };
+      } catch (e) {
+        rethrow(e);
+      }
+    },
+  },
+  {
+    name: "set_lamp_room",
+    title: "Move a lamp to a room",
+    description:
+      "Which room the app groups a bulb under. Use this when a lamp is in the wrong room, or when a " +
+      "newly paired bulb is sitting in \"Unassigned\".\n\n" +
+      "ORGANISATIONAL ONLY — it does not touch the bulb. Nothing turns on, nothing changes colour, and " +
+      "Home Assistant's own areas are unaffected; this is how the app's Home screen groups the lamp. " +
+      "If the user wants the light itself to change, they want set_lamp.\n\n" +
+      "ROOMS ARE A FIXED SET and this tool cannot create one. Call get_room first and use a room id you " +
+      "saw there — inventing one is refused. Pass room_id: null to clear an override, which returns the " +
+      "lamp to the assignment built into the app rather than making it unassigned.\n\n" +
+      "A bulb that is in the right room already is worth leaving alone: the built-in assignment covers " +
+      "the bulbs that were there when the app was built, and recording an override for one of those " +
+      "changes nothing a person would see.",
+    annotations: { readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity_id: { type: "string", description: "lamp entity id, or the name a person would say" },
+        room_id: {
+          type: ["string", "null"],
+          description: "a room id from get_room, or null to clear the override",
+        },
+      },
+      required: ["entity_id", "room_id"],
+    },
+    handler: async (a) => {
+      const needle = requiredStr(a, "entity_id");
+      const roomId = a.room_id === null ? null : requiredStr(a, "room_id");
+      try {
+        const before = await api.state();
+        const lamp = findLamp(before.lamps, needle);
+        if (!lamp) {
+          throw new ToolError(
+            `No lamp matches "${needle}". The lamps are: ` +
+              `${before.lamps.map((l) => `${l.name} (${l.entityId})`).join(", ")}.`,
+          );
+        }
+        const out = await api.lampRoom({ entity_id: lamp.entityId, room_id: roomId });
+        return {
+          data: out,
+          audit: { before: { room: lamp.room ?? null }, after: { room: out.room } },
+        };
       } catch (e) {
         rethrow(e);
       }

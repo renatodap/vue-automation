@@ -162,3 +162,26 @@ export async function recordTap(entityId: string): Promise<void> {
     // Intentionally swallowed.
   }
 }
+
+/**
+ * The per-bulb room overrides that shadow the static map in `lib/rooms.ts`.
+ *
+ * Never throws, exactly like `loadSceneMeta`: an empty map is the correct
+ * answer for "Postgres is unreachable", because resolution then falls through
+ * to the compiled-in assignments and Home groups the way it always has. This is
+ * the read that makes invariant 9 survive a metadata outage, so it must not be
+ * given the chance to fail loudly.
+ */
+export async function loadRoomOverrides(): Promise<Record<string, string>> {
+  const sql = db();
+  if (!sql) return {};
+  try {
+    const rows = await sql<{ entity_id: string; room_id: string }[]>`
+      SELECT entity_id, room_id FROM lamp_room`;
+    const out: Record<string, string> = {};
+    for (const r of rows) out[r.entity_id] = r.room_id;
+    return out;
+  } catch {
+    return {};
+  }
+}

@@ -1,6 +1,6 @@
 # vue-automation — agent context
 
-Home Assistant on a Pi 5 driving nine Zigbee bulbs across two rooms, plus a
+Home Assistant on a Pi 5 driving ten Zigbee bulbs across two rooms, plus a
 Next.js PWA (`web/`) that presents them as tappable scenes, a SwiftUI app
 (`ios/`), and a Claude MCP connector (`mcp/`, designed in
 `docs/architecture/mcp-connector.md`).
@@ -48,12 +48,21 @@ cd mcp && npm run build && npm test    # if mcp/ was touched
    *structurally* impossible; Home Assistant offers no such guarantee, so the HA
    side is named tools only.
 
-9. **Room assignment is a static map in `web/src/lib/rooms.ts`.** Home Assistant
-   owns areas but does not expose them over REST, and putting the grouping in
-   Postgres would collapse Home into one undifferentiated list every time the
-   metadata database blinked — the one thing invariant 2 promises cannot take
-   the lights with it. Anything unlisted lands in "Unassigned" rather than
-   vanishing, so a bulb paired at 2am can still be switched off.
+9. **Room assignment resolves override → static map → "Unassigned", and the
+   static map is the floor.** `ASSIGNMENTS` in `web/src/lib/rooms.ts` is
+   compiled in; `lamp_room` in Postgres may shadow it per-bulb, written only
+   through `/api/internal/lamp-room` (the connector's `set_lamp_room`). The
+   order is what matters: `loadRoomOverrides` swallows every failure and returns
+   `{}`, so an unreachable database falls through to the static map and the
+   grouping is unchanged — Home never collapses into one undifferentiated list,
+   which is what invariant 2 promises. Never invert this into "read the rooms
+   from Postgres, fall back to nothing". The state routes resolve the room
+   server-side and attach it to each lamp; `groupByRoom` still falls back to the
+   static map for any lamp that arrives without one. Anything in neither lands
+   in "Unassigned" rather than vanishing, so a bulb paired at 2am can still be
+   switched off. Rooms themselves stay a closed set in source — assigning a bulb
+   is bookkeeping, adding a room is a layout decision. See
+   `docs/superpowers/specs/2026-08-23-room-overrides-design.md`.
 
 10. **Bulbs lie about their range, and answer late.** The Third Reality ZL1
     advertises a 2000K floor it cannot physically reach: ask for 2000K and it

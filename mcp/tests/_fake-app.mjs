@@ -84,11 +84,13 @@ export function lampFixture() {
       entityId: "light.shelf_lamp", name: "Shelf lamp", reachable: true, on: true,
       brightness: 40, kelvin: 2700, minKelvin: 2000, maxKelvin: 6493,
       rgb: null, hs: null, supportsColor: true, colorMode: "color_temp",
+      room: "living",
     },
     {
       entityId: "light.floor_lamp", name: "Floor lamp", reachable: false, on: false,
       brightness: null, kelvin: null, minKelvin: 2000, maxKelvin: 6493,
       rgb: null, hs: null, supportsColor: true, colorMode: null,
+      room: "unassigned",
     },
   ];
 }
@@ -118,6 +120,12 @@ export function stateFixture(overrides = {}) {
     ],
     unreachableCount: 1,
     metadata: "ok",
+    rooms: [
+      { id: "living", name: "Living Room" },
+      { id: "bedroom", name: "Bedroom" },
+      { id: "unassigned", name: "Unassigned" },
+    ],
+    room_overrides: {},
     ...overrides,
   };
 }

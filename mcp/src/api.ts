@@ -99,6 +99,8 @@ export type Lamp = {
   hs: [number, number] | null;
   supportsColor: boolean;
   colorMode: string | null;
+  /** The room the app groups it under, already resolved by the state route. */
+  room?: string;
 };
 
 export type SceneRow = {
@@ -130,6 +132,11 @@ export type StateResponse = {
   automations: AutomationRow[];
   unreachableCount: number;
   metadata: "ok" | "unavailable";
+  /** The rooms the app can render. A closed set, defined in the app. */
+  rooms?: Array<{ id: string; name: string }>;
+  /** Which lamps have an explicit room override; empty when none, or when
+   *  Postgres was unreachable and the built-in assignments were used. */
+  room_overrides?: Record<string, string>;
 };
 
 export type ApplyResponse = {
@@ -176,6 +183,12 @@ export const api = {
 
   sceneMeta: (body: Record<string, unknown>) =>
     request<Record<string, unknown>>("POST", "/scene-meta", body),
+
+  lampRoom: (body: Record<string, unknown>) =>
+    request<{
+      ok: true; entity_id: string; lamp: string; room: string;
+      room_name: string; previous_room: string; note: string;
+    }>("POST", "/lamp-room", body),
 
   scheduleConfig: (id: string) =>
     request<{ ok: true; id: string; config: Record<string, unknown> | null }>(

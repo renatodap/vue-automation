@@ -7,7 +7,8 @@ import {
   toLamps,
   toScenes,
 } from "@/lib/ha";
-import { loadSceneMeta } from "@/lib/db";
+import { loadRoomOverrides, loadSceneMeta } from "@/lib/db";
+import { roomOf } from "@/lib/rooms";
 import { ConfigError } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
@@ -22,9 +23,19 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
-    const [states, meta] = await Promise.all([getStates(), loadSceneMeta()]);
+    const [states, meta, roomOverrides] = await Promise.all([
+      getStates(),
+      loadSceneMeta(),
+      loadRoomOverrides(),
+    ]);
 
-    const lamps = toLamps(states);
+    // The room is resolved HERE, once, so the client never has to know that an
+    // override layer exists. An unreachable Postgres yields no overrides and
+    // every lamp falls back to the static map — the grouping is unchanged.
+    const lamps = toLamps(states).map((lamp) => ({
+      ...lamp,
+      room: roomOf(lamp.entityId, roomOverrides),
+    }));
     const scenes = toScenes(states).map((scene) => {
       const m = meta.get(scene.entityId);
       return {
