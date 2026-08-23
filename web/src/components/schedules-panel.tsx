@@ -20,6 +20,14 @@ export function SchedulesPanel() {
   const [automations, setAutomations] = useState<AutomationsResponse | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  /**
+   * The one row currently asking "are you sure".
+   *
+   * A single id rather than a flag per row, so opening a second confirm closes
+   * the first — two rows both offering a red Delete is how you delete the wrong
+   * one.
+   */
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -29,6 +37,7 @@ export function SchedulesPanel() {
         return;
       }
       setAutomations((await response.json()) as AutomationsResponse);
+      setConfirmingDelete(null);
     } catch {
       setAutomations({
         ok: false,
@@ -79,6 +88,7 @@ export function SchedulesPanel() {
 
   const remove = (a: AutomationView) => {
     if (!a.id) return Promise.resolve();
+    setConfirmingDelete(null);
     return run(a.entityId, async () => {
       const response = await fetch(
         apiUrl(`/api/automations?id=${encodeURIComponent(a.id!)}`),
@@ -123,74 +133,88 @@ export function SchedulesPanel() {
           />
         )}
 
-        {list.map((a) => (
-          <div
-            key={a.entityId}
-            className="flex items-center gap-2.5 p-2.5 rounded-[var(--r-md)]"
-            style={{
-              background: "var(--surface)",
-              border: "1px solid var(--border)",
-            }}
-          >
-            <button
-              onClick={() => void toggle(a)}
-              disabled={busy === a.entityId}
-              role="switch"
-              aria-checked={a.enabled}
-              aria-label={`${a.enabled ? "Disable" : "Enable"} ${a.name}`}
-              className="shrink-0 rounded-[var(--r-pill)] transition-colors"
+        {list.map((a) =>
+          confirmingDelete === a.entityId ? (
+            <ConfirmDelete
+              key={a.entityId}
+              name={a.name}
+              busy={busy === a.entityId}
+              onConfirm={() => void remove(a)}
+              onCancel={() => setConfirmingDelete(null)}
+            />
+          ) : (
+            <div
+              key={a.entityId}
+              className="flex items-center gap-2.5 p-2.5 rounded-[var(--r-md)]"
               style={{
-                width: 42,
-                height: 26,
-                minHeight: 26,
-                padding: 3,
-                background: a.enabled ? "var(--accent)" : "var(--neutral-bg)",
-                border: a.enabled ? "none" : "1px solid var(--border-strong)",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
               }}
             >
-              <span
-                className="block rounded-[var(--r-pill)] transition-transform"
-                style={{
-                  width: 20,
-                  height: 20,
-                  background: "var(--surface)",
-                  transform: a.enabled ? "translateX(16px)" : "none",
-                }}
-              />
-            </button>
-
-            <div className="flex-1 min-w-0">
-              <div
-                className="text-[14px] break-words"
-                style={{ color: a.enabled ? "var(--text-primary)" : "var(--text-secondary)" }}
-              >
-                {a.name}
-              </div>
-              {/* An automation whose state is "off" still exists — it simply
-                  will not fire. Dimming the row to 55% made that look identical
-                  to a row that was merely stale, so the distinction is written
-                  out in words instead. */}
-              <div
-                className="text-[12px]"
-                style={{ color: a.enabled ? "var(--positive)" : "var(--warning)" }}
-              >
-                {a.enabled ? "Enabled" : "Off — kept, but won't fire"}
-              </div>
-            </div>
-
-            {a.id && (
               <button
-                onClick={() => void remove(a)}
+                onClick={() => void toggle(a)}
                 disabled={busy === a.entityId}
-                aria-label={`Delete ${a.name}`}
-                className="shrink-0"
-                style={{ minWidth: 34, color: "var(--text-muted)" }}
+                role="switch"
+                aria-checked={a.enabled}
+                aria-label={`${a.enabled ? "Disable" : "Enable"} ${a.name}`}
+                className="shrink-0 rounded-[var(--r-pill)] transition-colors"
+                style={{
+                  width: 42,
+                  height: 26,
+                  minHeight: 26,
+                  padding: 3,
+                  background: a.enabled ? "var(--accent)" : "var(--neutral-bg)",
+                  border: a.enabled ? "none" : "1px solid var(--border-strong)",
+                }}
               >
-                <Trash2 size={14} className="mx-auto" />
+                <span
+                  className="block rounded-[var(--r-pill)] transition-transform"
+                  style={{
+                    width: 20,
+                    height: 20,
+                    background: "var(--surface)",
+                    transform: a.enabled ? "translateX(16px)" : "none",
+                  }}
+                />
               </button>
-            )}
-          </div>
-        ))}
+
+              <div className="flex-1 min-w-0">
+                <div
+                  className="text-[14px] break-words"
+                  style={{ color: a.enabled ? "var(--text-primary)" : "var(--text-secondary)" }}
+                >
+                  {a.name}
+                </div>
+                {/* An automation whose state is "off" still exists — it simply
+                    will not fire. Dimming the row to 55% made that look identical
+                    to a row that was merely stale, so the distinction is written
+                    out in words instead. */}
+                <div
+                  className="text-[12px]"
+                  style={{ color: a.enabled ? "var(--positive)" : "var(--warning)" }}
+                >
+                  {a.enabled ? "Enabled" : "Off — kept, but won't fire"}
+                </div>
+              </div>
+
+              {/* Asks; it does not delete. Deleting a schedule cannot be undone
+                  and the app has no undo anywhere, so a single tap on a 34px
+                  icon was never a fair price for it — especially an icon that
+                  repeats identically every row down a scrolling list. */}
+              {a.id && (
+                <button
+                  onClick={() => setConfirmingDelete(a.entityId)}
+                  disabled={busy === a.entityId}
+                  aria-label={`Delete ${a.name}`}
+                  className="shrink-0"
+                  style={{ minWidth: 34, color: "var(--text-muted)" }}
+                >
+                  <Trash2 size={14} className="mx-auto" />
+                </button>
+              )}
+            </div>
+          ),
+        )}
 
         {adding ? (
           <ScheduleForm
@@ -384,5 +408,78 @@ function ScheduleForm({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * The confirm step for deleting a schedule.
+ *
+ * REPLACES the row rather than sitting beside it, so while it is on screen the
+ * row carries no other control — the enable toggle included. A second tap
+ * landing where a control used to be cannot do anything, whereas offering the
+ * confirm in the corner of an otherwise live row would only move the target.
+ *
+ * It names the schedule because the trash icons are identical and "Delete
+ * this?" does not tell you which one you are about to lose, and it points at
+ * the toggle as the reversible alternative: a disabled schedule is kept and
+ * simply never fires, which is what most people reaching for delete actually
+ * want. Deleting is the only action in this panel that cannot be undone.
+ */
+function ConfirmDelete({
+  name,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  name: string;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-2.5 p-2.5 rounded-[var(--r-md)]"
+      role="alertdialog"
+      aria-label={`Delete ${name}?`}
+      style={{ background: "var(--negative-bg)", border: "1px solid var(--negative)" }}
+    >
+      <div>
+        {/* Never truncate a schedule name here — wrap. Reading half a name is
+            how you confirm the wrong one. */}
+        <div className="text-[14px] break-words">Delete “{name}”?</div>
+        <div className="text-[12px] text-[var(--text-muted)]">
+          This can’t be undone. Turning it Off keeps it and stops it firing.
+        </div>
+      </div>
+
+      <div className="flex gap-1.5">
+        <button
+          onClick={onConfirm}
+          disabled={busy}
+          aria-label={`Yes, delete ${name}`}
+          className="flex-1 rounded-[var(--r-md)] text-[13px] font-medium disabled:opacity-50 active:scale-95 transition-transform"
+          style={{
+            minHeight: 44,
+            background: "var(--negative)",
+            color: "var(--text-on-accent)",
+          }}
+        >
+          {busy ? "Deleting…" : "Delete"}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={busy}
+          className="flex-1 rounded-[var(--r-md)] text-[13px] font-medium active:scale-95 transition-transform"
+          style={{
+            minHeight: 44,
+            background: "var(--surface)",
+            color: "var(--text-secondary)",
+            border: "1px solid var(--border-strong)",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
