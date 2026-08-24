@@ -69,6 +69,25 @@ here.
   Assistant itself keeps running and its own app still works on the LAN.
 - **A rotated HA token.** Long-lived tokens don't expire, but revoking one in
   HA breaks this app until `HA_TOKEN` is updated in Coolify.
+- **`?schema=public` on `DATABASE_URL`.** This one broke the metadata store
+  from the first deploy until 2026-08-23 and nobody noticed, because invariant
+  2 is *designed* to make a dead database look survivable. Coolify provisions
+  the URL with Prisma's `?schema=public` suffix (and a `DIRECT_URL` beside it);
+  this app uses `postgres.js`, which forwards every query parameter it doesn't
+  recognise to PostgreSQL as a **connection startup parameter** — and there is
+  no parameter called `schema`, so the server rejects the connection outright.
+  `psql` fails the same way: `invalid URI query parameter: "schema"`, which is
+  why the migration commands in `homeassistant/migrations/` all strip it with
+  `"${DATABASE_URL%%\?*}"`.
+
+  There is no error anywhere. `loadSceneMeta` and `loadRoomOverrides` swallow
+  failures by design, so every label falls back to Home Assistant's own name,
+  every accent to null, every tap count to zero, and the app looks exactly like
+  a fresh install nobody has customised yet. `scene_meta` had **0 rows** after
+  months. Diagnose it with the connector: `get_scenes` reports
+  `metadata: "unavailable"` when the app cannot reach Postgres, and that field
+  is the fastest signal you have. Keep the URL bare — the connector's own
+  `DATABASE_URL` has always been correct, so compare the two when in doubt.
 - **The home Wi-Fi.** Not fatal — see below. It is the one outage with a fix
   that takes five minutes.
 
