@@ -460,7 +460,7 @@ export function lightCommand(
  * Lamps that DROP the brightness component when brightness and colour arrive in
  * the same command.
  *
- * The Tuya RGB+CCT strip does exactly this, and it is not a timing artefact:
+ * Both Tuya RGB+CCT strips do exactly this, and it is not a timing artefact:
  * send it brightness on its own and it dims instantly; send brightness together
  * with a colour temperature — which is how every scene and every one-tap look
  * applies — and it takes the colour while silently keeping its old brightness.
@@ -469,7 +469,10 @@ export function lightCommand(
  * Keyed by entity id rather than sniffed from the model, because the entity id
  * is what every call site already has.
  */
-export const SPLIT_BRIGHTNESS = new Set(["light.0xa4c138939b2d0b23"]);
+export const SPLIT_BRIGHTNESS = new Set([
+  "light.0xa4c138939b2d0b23", // keyboard strip — behind the desk
+  "light.0xa4c13898403028f1", // bedroom tv strip
+]);
 
 function needsSplitBrightness(patch: LightPatch): boolean {
   return (

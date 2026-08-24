@@ -42,6 +42,7 @@ const ASSIGNMENTS: Record<string, RoomId> = {
   "light.0xb4e84290af510000": "bedroom", // bedroom floor lamp
   "light.0xb4e8428f428b0000": "bedroom", // bedroom lamp
   "light.0xb4e842918a2f0000": "bedroom", // bedroom bedside lamp
+  "light.0xa4c13898403028f1": "bedroom", // bedroom tv strip — the LED strip
 };
 
 /** True for a room the app can actually render. Rooms are a closed set. */
@@ -85,12 +86,19 @@ export function groupByRoom(lamps: LampView[]): { room: Room; lamps: LampView[] 
 // ------------------------------------------------------------------- looks
 
 /**
- * The LED strip runs at full brightness in the two dim looks.
+ * The LED strips run at full brightness in the two dim looks.
  *
- * It sits behind a desk rather than in the open, so the level that reads as
- * "dim" on a lamp in the middle of the room reads as "off" on this one.
+ * They sit behind a desk and behind a television rather than out in the open,
+ * so the level that reads as "dim" on a lamp in the middle of the room reads as
+ * "off" on these. A set rather than one id: there are two now, and there is
+ * nothing about the rule that was ever specific to the first one.
+ *
+ * This is the same membership as SPLIT_BRIGHTNESS in `ha.ts` and for the same
+ * hardware, but deliberately a separate list — that one is a workaround for a
+ * bug in the bulb, this one is a decision about how a hidden light should look.
+ * A strip that got fixed in firmware would leave this list unchanged.
  */
-const STRIP = "light.0xa4c138939b2d0b23";
+const STRIPS = new Set(["light.0xa4c138939b2d0b23", "light.0xa4c13898403028f1"]);
 
 export type LookId = "orange" | "white" | "warm";
 
@@ -120,7 +128,7 @@ export const LOOKS: Look[] = [
  * which really does reach 2000.
  */
 export function lookPatch(look: LookId, entityId: string): LampPatch {
-  const strip = entityId === STRIP;
+  const strip = STRIPS.has(entityId);
   switch (look) {
     case "orange":
       return {
