@@ -23,12 +23,14 @@ export const HA_TOKEN = "test-ha-admin-token";
  *   devices   – device registry rows (mutable through the returned handle)
  *   entities  – entity registry rows
  *   failEntityUpdate – message to refuse `config/entity_registry/update` with
+ *   states           – entity_id → state, readable at /api/states/<id>
  *   failPublish      – [status, body] to answer mqtt.publish with
- * @returns handle with { url, published, renames, setDevices, setEntities, close }
+ * @returns handle with { url, published, renames, setDevices, setEntities, setState, close }
  */
 export async function startFakeHa(opts = {}) {
   let devices = opts.devices ?? [];
   let entities = opts.entities ?? [];
+  const states = { ...(opts.states ?? {}) };
   const published = [];
   const renames = [];
   const state = { failEntityUpdate: opts.failEntityUpdate ?? null, failPublish: opts.failPublish ?? null };
@@ -61,7 +63,7 @@ export async function startFakeHa(opts = {}) {
 
     if (req.method === "GET" && url.pathname.startsWith("/api/states/")) {
       const entityId = decodeURIComponent(url.pathname.slice("/api/states/".length));
-      const value = (opts.states ?? {})[entityId];
+      const value = states[entityId];
       if (value === undefined) {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ message: "Entity not found." }));
@@ -132,6 +134,11 @@ export async function startFakeHa(opts = {}) {
     },
     setEntities: (next) => {
       entities = next;
+    },
+    /** Drive an entity's state — the permit-join switch is read back by
+     *  start_pairing to prove the mesh actually opened. */
+    setState: (entityId, value) => {
+      states[entityId] = value;
     },
     failEntityUpdate: (message) => {
       state.failEntityUpdate = message;

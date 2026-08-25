@@ -120,6 +120,7 @@ test("pairing_open is read from the permit-join entity when the broker cannot an
 // ------------------------------------------------------------------ start_pairing
 
 test("start_pairing publishes permit_join through HA's mqtt.publish service", async () => {
+  ha.setState("switch.zigbee2mqtt_bridge_permit_join", "on");
   const data = ok(await call("start_pairing", { seconds: 120 }), "start_pairing");
 
   assert.equal(ha.published.length, 1, "exactly one publish, through Home Assistant");
@@ -138,16 +139,48 @@ test("start_pairing publishes permit_join through HA's mqtt.publish service", as
   assert.match(data.next, /poll_pairing/, "the model must be routed to the asynchronous half");
 });
 
-test("start_pairing coerces a nonsense window instead of failing on it", async () => {
+test("start_pairing clamps the window to Zigbee's 254-second ceiling", async () => {
+  ha.setState("switch.zigbee2mqtt_bridge_permit_join", "on");
   const data = ok(await call("start_pairing", { seconds: "9999" }), "start_pairing");
-  assert.equal(data.open_for_seconds, 600, "the window is capped hard — the model sends what it likes");
-  assert.equal(JSON.parse(ha.published[0].payload).time, 600);
+
+  // 254 is the PROTOCOL's ceiling, not a policy choice: the Zigbee permit-join
+  // duration is an 8-bit field. This was capped at 600 once, and a request for
+  // 300 was rejected by Zigbee2MQTT SILENTLY — the publish succeeded, the mesh
+  // stayed shut, and the tool reported ok. Someone spent the window resetting a
+  // bulb into a mesh that was never open.
+  assert.equal(data.open_for_seconds, 254, "the window is capped at Zigbee's own limit");
+  assert.equal(JSON.parse(ha.published[0].payload).time, 254, "and z2m is never asked for more");
 });
 
 test("start_pairing(0) closes the mesh again", async () => {
+  ha.setState("switch.zigbee2mqtt_bridge_permit_join", "off");
   const data = ok(await call("start_pairing", { seconds: 0 }), "start_pairing");
   assert.equal(JSON.parse(ha.published[0].payload).time, 0);
   assert.match(data.next, /closed/i);
+});
+
+test("start_pairing proves the mesh opened by reading the permit-join switch", async () => {
+  ha.setState("switch.zigbee2mqtt_bridge_permit_join", "on");
+  const data = ok(await call("start_pairing", { seconds: 60 }), "start_pairing");
+  assert.equal(
+    data.mesh_open, true,
+    "the permit-join switch is the only readable proof; `published: true` proves only that HA accepted it",
+  );
+});
+
+test("start_pairing REFUSES to report success when the mesh did not actually open", async () => {
+  // Zigbee2MQTT ignoring the request looks EXACTLY like it accepting one: the
+  // publish returns 200 either way and nothing answers on bridge/response.
+  ha.setState("switch.zigbee2mqtt_bridge_permit_join", "off");
+  const res = await call("start_pairing", { seconds: 60 });
+
+  assert.equal(
+    res.result.isError, true,
+    "a mesh that did not open is a failure, not a footnote on a success",
+  );
+  const text = res.result.content?.[0]?.text ?? "";
+  assert.match(text, /did not open/i, "it must say plainly that the mesh is shut");
+  assert.match(text, /reset/i, "and stop the model sending someone to reset a device for nothing");
 });
 
 // ------------------------------------------------------------------- poll_pairing
@@ -164,6 +197,7 @@ test("poll_pairing with no baseline refuses to call anything new", async () => {
 });
 
 test("poll_pairing reports a device that appeared in the registry since pairing opened", async () => {
+  ha.setState("switch.zigbee2mqtt_bridge_permit_join", "on");
   ok(await call("start_pairing", { seconds: 120 }), "start_pairing");
 
   // A bulb finishes its interview: Home Assistant registers the device.
@@ -180,6 +214,7 @@ test("poll_pairing reports a device that appeared in the registry since pairing 
 });
 
 test("poll_pairing reports nothing new when nothing joined, without inventing a failure", async () => {
+  ha.setState("switch.zigbee2mqtt_bridge_permit_join", "on");
   ok(await call("start_pairing", { seconds: 120 }), "start_pairing");
   const data = ok(await call("poll_pairing"), "poll_pairing");
   assert.equal(data.appeared_count, 0);

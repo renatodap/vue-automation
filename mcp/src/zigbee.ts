@@ -295,6 +295,65 @@ export type PairingSnapshot = {
  */
 let snapshot: PairingSnapshot | null = null;
 
+/**
+ * Zigbee's own ceiling on how long a mesh can be held open.
+ *
+ * The permit-join duration is an 8-bit field, so 254 is the protocol's limit
+ * and NOT a policy choice here. Asking Zigbee2MQTT for more is rejected
+ * SILENTLY: `mqtt.publish` still returns 200, nothing opens, and no error is
+ * readable from this side because nothing is subscribed to bridge/response.
+ * This tool was capped at 600 once; a request for 300 looked exactly like
+ * success and sent someone off to reset a bulb into a mesh that was shut.
+ */
+export const MAX_PERMIT_JOIN_SECONDS = 254;
+
+/** Zigbee2MQTT publishes a permit-join switch through Home Assistant discovery,
+ *  and it hangs off the coordinator device. It is the only readable fact about
+ *  whether the mesh is actually open. */
+export function permitJoinEntity(devices: ZigbeeDevice[]): string | null {
+  for (const device of devices) {
+    const hit = device.entities.find((e) => /permit_join/i.test(e));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+const CONFIRM_ATTEMPTS = 4;
+const CONFIRM_DELAY_MS = 1000;
+
+/**
+ * Read the permit-join switch back until it agrees with what was asked for.
+ *
+ * A publish proves only that Home Assistant accepted it. Zigbee2MQTT answers on
+ * bridge/response/*, which nothing here subscribes to, so "sent" and "worked"
+ * are indistinguishable without reading state — and this is the same rule as
+ * invariant 10: verify a write against a FRESH read, never against the response
+ * to the write itself.
+ *
+ * Returns null when the switch could not be read at all. Null is an honest
+ * "unknown"; false would claim the mesh is shut on no evidence.
+ */
+export async function confirmPermitJoin(
+  entityId: string | null,
+  want: boolean,
+): Promise<boolean | null> {
+  if (!entityId) return null;
+  let last: boolean | null = null;
+  for (let attempt = 0; attempt < CONFIRM_ATTEMPTS; attempt += 1) {
+    try {
+      const value = (await entityState(entityId))?.state;
+      last = value === "on" ? true : value === "off" ? false : null;
+      if (last === want) return last;
+    } catch {
+      last = null;
+    }
+    if (attempt < CONFIRM_ATTEMPTS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, CONFIRM_DELAY_MS));
+    }
+  }
+  return last;
+}
+
 export function takePairingSnapshot(devices: ZigbeeDevice[], openForSeconds: number): PairingSnapshot {
   snapshot = {
     at: new Date().toISOString(),

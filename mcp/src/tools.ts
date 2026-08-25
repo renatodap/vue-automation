@@ -21,8 +21,9 @@ import { bridgeEvents, MqttError } from "./mqtt.js";
 import { HaRegistryError, renameEntity } from "./ha-registry.js";
 import { HaServiceError } from "./ha-service.js";
 import {
-  devicesSinceSnapshot, findZigbeeDevice, pairingSnapshot, surveyZigbee,
-  takePairingSnapshot, z2mRequest, ZigbeeError, type ZigbeeDevice,
+  confirmPermitJoin, devicesSinceSnapshot, findZigbeeDevice, MAX_PERMIT_JOIN_SECONDS,
+  pairingSnapshot, permitJoinEntity, surveyZigbee, takePairingSnapshot, z2mRequest,
+  ZigbeeError, type ZigbeeDevice,
 } from "./zigbee.js";
 import { consumeProposal, createProposal, pendingProposals, ProposalError } from "./propose.js";
 
@@ -953,39 +954,68 @@ export const TOOLS: ToolDef[] = [
       "Pairing is ASYNCHRONOUS. This call returns as soon as the request is sent, long before anything " +
       "joins; a bulb typically announces itself somewhere between two and ninety seconds later. Do NOT " +
       "report a device as paired here — call poll_pairing afterwards and report what actually arrived.\n\n" +
+      "THE WINDOW IS CAPPED AT 254 SECONDS, which is Zigbee's own limit rather than a choice made " +
+      "here — the permit-join duration is an 8-bit field. Ask for more and Zigbee2MQTT rejects the " +
+      "whole request without saying so, which is indistinguishable from success. A larger number is " +
+      "clamped rather than refused; if someone needs longer, call this again.\n\n" +
+      "The result is VERIFIED: after publishing, the permit-join switch is read back, and this fails " +
+      "rather than reporting success if the mesh did not actually open. `mesh_open` is that reading.\n\n" +
       "Pass 0 to close pairing again. Leaving the mesh open indefinitely is a security matter: anything " +
       "in radio range can join.",
     annotations: { readOnlyHint: false, openWorldHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        seconds: { type: "number", description: "how long to stay open, 0–600 (0 closes it). Default 120." },
+        seconds: { type: "number", description: "how long to stay open, 0–254 (0 closes it). Default 120." },
       },
     },
     handler: async (a) => {
-      const seconds = Math.max(0, Math.min(Math.round(num(a, "seconds") ?? 120), 600));
+      const asked = Math.max(0, Math.round(num(a, "seconds") ?? 120));
+      const seconds = Math.min(asked, MAX_PERMIT_JOIN_SECONDS);
       try {
         // The baseline is taken BEFORE the mesh opens, so anything that joins
         // afterwards is unambiguously new.
         const before = await surveyZigbee();
         const res = await z2mRequest("permit_join", { time: seconds });
+
+        // A publish proves only that Home Assistant accepted it. Read the
+        // switch back before telling anyone to go reset a device.
+        const meshOpen = await confirmPermitJoin(permitJoinEntity(before.devices), seconds > 0);
+        if (seconds > 0 && meshOpen === false) {
+          throw new ToolError(
+            "Home Assistant accepted the request but the mesh did not open — Zigbee2MQTT's " +
+              "permit-join switch still reads off. NOTHING CAN PAIR right now, so do not tell anyone " +
+              "to reset a device yet. No baseline was recorded. Zigbee2MQTT is running (it answered " +
+              "for the device registry), so the usual cause is that it refused the request rather " +
+              "than that it is down — try again, and check its log if it keeps refusing.",
+          );
+        }
+
+        // Only now: a baseline for a mesh that never opened would make
+        // poll_pairing report "nothing new" as though that were informative.
         const snapshot = takePairingSnapshot(before.devices, seconds);
         return {
           data: {
             ok: true,
             open_for_seconds: seconds,
+            requested_seconds: asked,
+            clamped: asked > seconds,
             since: snapshot.at,
             known_devices_before: before.devices.length,
             zigbee2mqtt: res,
+            mesh_open: meshOpen,
             next:
               seconds > 0
                 ? "Tell the user to factory-reset the bulb NOW, then call poll_pairing in ~20 seconds " +
                   "and again after that. Nothing has joined yet." +
-                  (res.confirmed
-                    ? ""
-                    : " Zigbee2MQTT's own acknowledgement could not be read (the connector has no " +
-                      "direct broker connection), so treat 'the mesh is open' as expected rather than " +
-                      "as confirmed — poll_pairing is what proves it.")
+                  (asked > seconds
+                    ? ` The window was shortened from ${asked}s to ${seconds}s: that is Zigbee's own ` +
+                      "ceiling, and asking for more would have been rejected silently."
+                    : "") +
+                  (meshOpen === null
+                    ? " The permit-join switch could not be read, so it is NOT confirmed that the mesh " +
+                      "is open — say so, and let poll_pairing be the proof."
+                    : "")
                 : "Pairing is closed.",
           },
           audit: { before: { pairing_open: false }, after: { pairing_open: seconds > 0, seconds } },
