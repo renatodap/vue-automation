@@ -44,6 +44,7 @@ const ASSIGNMENTS: Record<string, RoomId> = {
   "light.0xb4e842918a2f0000": "bedroom", // bedroom bedside lamp
   "light.0xa4c13898403028f1": "bedroom", // bedroom tv strip — the LED strip
   "light.0xa4c138f7081797c5": "living", // tv console strip — the LED strip
+  "light.0xa4c1381575d783a5": "living", // counter strip — the LED strip
 };
 
 /** True for a room the app can actually render. Rooms are a closed set. */
@@ -89,7 +90,8 @@ export function groupByRoom(lamps: LampView[]): { room: Room; lamps: LampView[] 
 /**
  * The LED strips run at full brightness in the two dim looks.
  *
- * They sit behind a desk, a television and a console rather than out in the open,
+ * They sit behind a desk, a television, a console and a counter rather than in
+ * the open,
  * so the level that reads as "dim" on a lamp in the middle of the room reads as
  * "off" on these. A set rather than one id: there are two now, and there is
  * nothing about the rule that was ever specific to the first one.
@@ -103,6 +105,7 @@ const STRIPS = new Set([
   "light.0xa4c138939b2d0b23", // keyboard strip — behind the desk
   "light.0xa4c13898403028f1", // bedroom tv strip
   "light.0xa4c138f7081797c5", // tv console strip
+  "light.0xa4c1381575d783a5", // counter strip — under the counter
 ]);
 
 export type LookId = "orange" | "white" | "warm";

@@ -1,8 +1,9 @@
 # vue-automation — agent context
 
-Home Assistant on a Pi 5 driving ten Zigbee bulbs across two rooms, plus a
-Next.js PWA (`web/`) that presents them as tappable scenes, a SwiftUI app
-(`ios/`), and a Claude MCP connector (`mcp/`, designed in
+Home Assistant on a Pi 5 driving thirteen Zigbee lights across two rooms — nine
+bulbs and four LED strips — with a wall remote per room, plus a Next.js PWA
+(`web/`) that presents them as tappable scenes, a SwiftUI app (`ios/`), and a
+Claude MCP connector (`mcp/`, designed in
 `docs/architecture/mcp-connector.md`).
 
 Checks before committing:

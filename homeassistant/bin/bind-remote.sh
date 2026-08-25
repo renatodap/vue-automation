@@ -40,8 +40,8 @@ HA="${HA_BASE_URL:?Set HA_BASE_URL, e.g. http://100.85.128.101}"
 # them too — the remote and the app's room button do the same thing.
 
 LIVING_TOPIC="zigbee2mqtt/0x6ce4a4fffe99d9c7"
-LIVING_LAMPS='"light.abajour", "light.floor_lamp", "light.shelf_lamp", "light.tv_lamp", "light.0xb4e8428fd6070000", "light.0xb4e8428ffab10000", "light.0xa4c138939b2d0b23", "light.0xa4c138f7081797c5"'
-LIVING_STRIPS='"light.0xa4c138939b2d0b23", "light.0xa4c138f7081797c5"'
+LIVING_LAMPS='"light.abajour", "light.floor_lamp", "light.shelf_lamp", "light.tv_lamp", "light.0xb4e8428fd6070000", "light.0xb4e8428ffab10000", "light.0xa4c138939b2d0b23", "light.0xa4c138f7081797c5", "light.0xa4c1381575d783a5"'
+LIVING_STRIPS='"light.0xa4c138939b2d0b23", "light.0xa4c138f7081797c5", "light.0xa4c1381575d783a5"'
 
 BED_TOPIC="zigbee2mqtt/0xd878f0fffec1edbb"
 BED_LAMPS='"light.0xb4e84290af510000", "light.0xb4e8428f428b0000", "light.0xb4e842918a2f0000", "light.0xa4c13898403028f1"'
@@ -57,8 +57,8 @@ BED_STRIPS='"light.0xa4c13898403028f1"'
 # The strips also run BRIGHTER than the lamps in the two dim looks, because they
 # sit behind a desk, a television and a console — the level that reads as "dim"
 # on a lamp in the open reads as "off" on those. Same rule as `STRIPS` in
-# rooms.ts. The living room has TWO strips now, which is why the follow-up takes
-# a list rather than a single id.
+# rooms.ts. The living room has THREE strips now, which is why the follow-up
+# takes a list rather than a single id.
 
 look_actions() { # lamps strips colour_json lamp_pct strip_pct
   cat <<JSON

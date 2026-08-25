@@ -473,6 +473,7 @@ export const SPLIT_BRIGHTNESS = new Set([
   "light.0xa4c138939b2d0b23", // keyboard strip — behind the desk
   "light.0xa4c13898403028f1", // bedroom tv strip
   "light.0xa4c138f7081797c5", // tv console strip
+  "light.0xa4c1381575d783a5", // counter strip — under the living-room counter
 ]);
 
 function needsSplitBrightness(patch: LightPatch): boolean {
