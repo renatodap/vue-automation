@@ -1,0 +1,236 @@
+# Candle — Abajour + Shelf Lamp
+#
+# Paste into `automations.yaml` as-is (it is a two-item list), or paste ONE
+# item at a time into Settings → Automations → ⋮ → Edit in YAML, dropping the
+# leading `- `.
+#
+#
+# WHY THIS IS NOT 10 Hz
+#
+# The "candles flicker at 10-12 Hz" figure is real, but it is not about one
+# candle. Research on flame oscillation finds a single wick is essentially
+# steady: "a single candle's flame does not exhibit visible oscillation and
+# remains stable; with 2 candles the flame exhibits tiny fluctuation; but with
+# more than 3 candles, the flame exhibits regular oscillation." The 10-11 Hz
+# rhythm is a COUPLED phenomenon — three or more flames driving each other
+# through shared buoyancy. What a single candle does is gutter: slow,
+# irregular, mostly steady, with occasional dips from air movement.
+#
+# That is lucky, because Zigbee could not carry 10 Hz anyway. Broadcast traffic
+# on a Zigbee mesh is held near one message per second before flooding becomes
+# a risk, and this mesh carries fourteen lights and two wall remotes. These two
+# loops together average ~1.3 commands/sec and lean on `transition` to make the
+# motion continuous between them: the bulb interpolates locally, so you get
+# smooth movement without paying traffic for smoothness.
+#
+#
+# WHY TWO SEPARATE AUTOMATIONS
+#
+# One loop driving both lamps would move them in lockstep, which is the one
+# thing two real flames never do. These draw their randomness independently AND
+# run on deliberately different periods (shelf ~1.4s, abajour ~1.65s), so they
+# drift through phase against each other — sometimes together, sometimes
+# opposed. That drift is the closest honest approximation of the in-phase /
+# anti-phase coupling the research describes, and it is what makes two lamps
+# read as two flames rather than one dimmer driving two bulbs.
+#
+#
+# HOW TO RUN
+#   Developer Tools → Events → `candle_start` → Fire event. Both lamps pick it
+#   up. Or hit "Run" on either automation to light just that one.
+#
+# HOW TO STOP
+#   Turn the lamp off, or apply any other scene. Both are checked every
+#   iteration and each loop stands down rather than fighting you. Each also
+#   caps itself — a candle burns down, it does not run until reboot.
+#
+#
+# LIVING ROOM ONLY, deliberately. A whole apartment flickering reads as an
+# electrical fault, not a flame.
+#
+# NOT for the Tuya strips (keyboard, bedroom tv, tv console, counter): they
+# discard brightness sent alongside colour, so every step here would drop its
+# brightness and silently keep the old one. See CLAUDE.md invariant 12. Both
+# lamps below are Third Reality ZL1 bulbs, which do not have that fault.
+
+# ---------------------------------------------------------------------------
+- alias: Candle — Shelf Lamp
+  description: >-
+    Deep-ember flame on the shelf lamp. ~0.7 Zigbee commands/sec, ~15 minutes,
+    then settles back to its place in the room's orange gradient.
+  mode: restart
+  max_exceeded: silent
+
+  triggers:
+    - trigger: event
+      event_type: candle_start
+
+  conditions: []
+
+  actions:
+    - repeat:
+        while:
+          # Stop the moment the lamp is switched off. At the wall the bulb goes
+          # unavailable; from HA it goes off. Either way this must not keep
+          # sending turn_on and fight the person holding the switch.
+          - condition: state
+            entity_id: light.shelf_lamp
+            state: "on"
+
+          # Stand down if anything else claims the lamp. Checked as a BAND, not
+          # a ceiling: a scene can land on either side of the flame range, and
+          # a one-sided test only catches half of them. The loop's own hues
+          # (12-19) sit inside 8-23, so it can never evict itself.
+          # `is not none` matters: a scene that switches the bulb to colour
+          # temperature clears hs_color entirely, and a bare default would read
+          # as "still a flame" and keep the loop running against it.
+          - condition: template
+            value_template: >-
+              {% set h = state_attr('light.shelf_lamp', 'hs_color') %}
+              {{ h is not none and 8 <= (h[0] | float(99)) <= 23 }}
+
+          # Hard ceiling, ~15 minutes at this pacing.
+          - condition: template
+            value_template: "{{ repeat.index <= 650 }}"
+
+        sequence:
+          - variables:
+              roll: "{{ range(1, 101) | random }}"
+
+          - variables:
+              # NOT uniform. A flame sits near its top most of the time and
+              # dips occasionally. Uniform random across the whole band is
+              # constant agitation at every amplitude, which reads as a failing
+              # bulb rather than a flame — it is the single biggest tell.
+              #   68%  steady, barely moving
+              #   25%  a visible dip
+              #    7%  a deep gutter
+              # Floor is 9, not 7: below that the ZL1 is close to its usable
+              # minimum and a gutter reads as the lamp cutting out.
+              level: >-
+                {% if roll | int <= 68 %}{{ range(16, 21) | random }}{% elif roll | int <= 93 %}{{ range(12, 16) | random }}{% else %}{{ range(9, 12) | random }}{% endif %}
+
+          - action: light.turn_on
+            target:
+              entity_id: light.shelf_lamp
+            data:
+              brightness_pct: "{{ level | int }}"
+
+              # Colour tracks brightness instead of wandering independently: a
+              # flame goes deeper red as it drops and opens up as it recovers.
+              # Rolling hue separately is colour noise, and it looks like an RGB
+              # bulb doing a trick rather than something burning.
+              #   level  9 →  hue 12.0, sat 99.0   (deep ember)
+              #   level 20 →  hue 19.0, sat 93.0   (open flame)
+              hs_color:
+                - "{{ (12 + (level | int - 9) * 0.636) | round(1) }}"
+                - "{{ (99 - (level | int - 9) * 0.545) | round(1) }}"
+
+              # Guttering is ASYMMETRIC — a flame drops fast and recovers
+              # slowly. Deep dips snap in a third of a second; everything else
+              # eases over a second or more. This asymmetry is most of what
+              # sells it; a symmetric fade reads as a dimmer being swept.
+              transition: "{{ 0.3 if level | int < 12 else (range(10, 17) | random) / 10 }}"
+
+          - delay:
+              milliseconds: "{{ range(900, 1900) | random }}"
+
+    # Settle back to where this lamp sits in the room's gradient — but ONLY if
+    # the loop ran out on its own. If it stopped because the lamp was switched
+    # off or a scene took over, this must not reach out and undo that.
+    - if:
+        - condition: state
+          entity_id: light.shelf_lamp
+          state: "on"
+        - condition: template
+          value_template: >-
+            {% set h = state_attr('light.shelf_lamp', 'hs_color') %}
+            {{ h is not none and 8 <= (h[0] | float(99)) <= 23 }}
+      then:
+        - action: light.turn_on
+          target:
+            entity_id: light.shelf_lamp
+          data:
+            brightness_pct: 15
+            hs_color: [15.9, 94.5]
+            transition: 4
+
+# ---------------------------------------------------------------------------
+- alias: Candle — Abajour
+  description: >-
+    Open-amber flame on the abajour, running on a longer period than the shelf
+    lamp so the two drift through phase instead of pulsing in lockstep.
+    ~0.6 Zigbee commands/sec, ~15 minutes, then settles.
+  mode: restart
+  max_exceeded: silent
+
+  triggers:
+    - trigger: event
+      event_type: candle_start
+
+  conditions: []
+
+  actions:
+    - repeat:
+        while:
+          - condition: state
+            entity_id: light.abajour
+            state: "on"
+
+          # Band is 17-33 rather than 8-23: this lamp carries the warmer, more
+          # open end of the gradient. The lower bound sits above the shelf
+          # lamp's flame range on purpose, so a scene that pushes the abajour
+          # down to a deep ember still counts as someone else claiming it.
+          - condition: template
+            value_template: >-
+              {% set h = state_attr('light.abajour', 'hs_color') %}
+              {{ h is not none and 17 <= (h[0] | float(99)) <= 33 }}
+
+          - condition: template
+            value_template: "{{ repeat.index <= 550 }}"
+
+        sequence:
+          - variables:
+              roll: "{{ range(1, 101) | random }}"
+
+          - variables:
+              # Same 68/25/7 shape, one stop brighter throughout — the abajour
+              # is the lamp that actually lights the room, and dropping it to
+              # the shelf lamp's ember range would darken the whole space
+              # rather than read as a flame.
+              level: >-
+                {% if roll | int <= 68 %}{{ range(21, 27) | random }}{% elif roll | int <= 93 %}{{ range(16, 21) | random }}{% else %}{{ range(12, 16) | random }}{% endif %}
+
+          - action: light.turn_on
+            target:
+              entity_id: light.abajour
+            data:
+              brightness_pct: "{{ level | int }}"
+              #   level 12 →  hue 19.0, sat 96.0
+              #   level 26 →  hue 28.0, sat 87.0
+              hs_color:
+                - "{{ (19 + (level | int - 12) * 0.643) | round(1) }}"
+                - "{{ (96 - (level | int - 12) * 0.643) | round(1) }}"
+              transition: "{{ 0.3 if level | int < 16 else (range(11, 18) | random) / 10 }}"
+
+          # Longer than the shelf lamp's 900-1900ms. The offset is the point:
+          # two flames on the same period would beat together forever.
+          - delay:
+              milliseconds: "{{ range(1100, 2200) | random }}"
+
+    - if:
+        - condition: state
+          entity_id: light.abajour
+          state: "on"
+        - condition: template
+          value_template: >-
+            {% set h = state_attr('light.abajour', 'hs_color') %}
+            {{ h is not none and 17 <= (h[0] | float(99)) <= 33 }}
+      then:
+        - action: light.turn_on
+          target:
+            entity_id: light.abajour
+          data:
+            brightness_pct: 24
+            hs_color: [24.9, 90.6]
+            transition: 4
