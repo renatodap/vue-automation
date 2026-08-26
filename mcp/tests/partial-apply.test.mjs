@@ -28,6 +28,7 @@ const { handleRpc } = await import("../dist/rpc.js");
 
 let app;
 let applyCalls = [];
+let lampCalls = [];
 
 /** The report the app returns for a scene that reached one lamp of two. */
 function partialReport() {
@@ -55,6 +56,28 @@ before(async () => {
       applyCalls.push(body);
       if (body.action !== "apply") return [400, { error: `unexpected action ${body.action}` }];
       return [200, partialReport()];
+    },
+    "POST /api/internal/lamp": (body) => {
+      lampCalls.push(body);
+      const lamps = lampFixture().filter((l) => (body.entity_ids ?? []).includes(l.entityId));
+      return [
+        200,
+        {
+          ok: true,
+          read_at: new Date().toISOString(),
+          lamps,
+          unreachable: lamps.filter((l) => !l.reachable).map((l) => l.name),
+          fully_applied: lamps.every((l) => l.reachable),
+          summary: "Done.",
+          ...(body.effect
+            ? {
+                effect_note:
+                  `Sent the "${body.effect}" effect. blink, breathe, okay and channel_change are ` +
+                  `Zigbee Identify animations: they run a short fixed sequence and stop on their own.`,
+              }
+            : {}),
+        },
+      ];
     },
   });
 });
@@ -153,6 +176,50 @@ test("set_lamp with no change to make is refused rather than sent as a no-op", a
   const res = await call("set_lamp", { entity_id: "light.shelf_lamp" });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /get_lamp/, "it should point at the read tool instead");
+});
+
+test("set_lamp refuses an effect the bulb does not advertise, before touching the app", async () => {
+  // Identical failure shape to an out-of-range Kelvin: Home Assistant accepts
+  // the call, drops the unknown effect in silence, and the lamp sits still
+  // while the caller is told it worked. So it has to be refused here.
+  const before = app.requests.length;
+  const res = await call("set_lamp", { entity_id: "light.shelf_lamp", effect: "candle" });
+  assert.equal(res.result.isError, true);
+  assert.match(
+    res.result.content[0].text, /advertises: blink, breathe/,
+    "the refusal must quote the bulb's own list, not a generic message",
+  );
+  const wrote = app.requests.slice(before).filter((r) => r.path === "/api/internal/lamp");
+  assert.equal(wrote.length, 0, "nothing should have been sent to the app");
+});
+
+test("set_lamp sends an advertised effect through to the app", async () => {
+  lampCalls = [];
+  const res = await call("set_lamp", { entity_id: "light.shelf_lamp", effect: "breathe" });
+  assert.equal(res.result.isError, false, "an effect the bulb offers is not an error");
+  assert.equal(lampCalls.length, 1, "the write must actually reach the app");
+  assert.equal(lampCalls[0].effect, "breathe", "the effect must survive the relay");
+  assert.deepEqual(lampCalls[0].entity_ids, ["light.shelf_lamp"]);
+});
+
+test("an effect alone is a change — it is not treated as an empty call", async () => {
+  // `effect` was added after on/brightness/kelvin/hs, and the guard that
+  // rejects an empty patch is exactly where a new field gets forgotten.
+  lampCalls = [];
+  const res = await call("set_lamp", { entity_id: "light.shelf_lamp", effect: "stop_effect" });
+  assert.equal(res.result.isError, false, "effect on its own must be accepted");
+  assert.equal(lampCalls.length, 1);
+});
+
+test("the app's note about an effect being momentary reaches the model", async () => {
+  // The model must not offer `breathe` as a lasting candle mode. That warning
+  // only works if it survives the relay into structuredContent.
+  const res = await call("set_lamp", { entity_id: "light.shelf_lamp", effect: "breathe" });
+  assert.match(
+    res.result.structuredContent.effect_note ?? "",
+    /stop on their own/,
+    "the momentary-effect warning must not be dropped on the way to the model",
+  );
 });
 
 test("an unknown tool NAME is the one genuine protocol error", async () => {

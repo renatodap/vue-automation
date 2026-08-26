@@ -230,11 +230,15 @@ export const TOOLS: ToolDef[] = [
     name: "get_lamp",
     title: "One lamp, in full",
     description:
-      "One lamp's live state, including the range it can actually be tuned to. Accepts the entity id " +
-      "(`light.floor_lamp`) or the name a person would say ('the arc lamp over the couch' → floor lamp).\n\n" +
+      "One lamp's live state, including the range it can actually be tuned to and the effects it can " +
+      "run. Accepts the entity id (`light.floor_lamp`) or the name a person would say ('the arc lamp " +
+      "over the couch' → floor lamp).\n\n" +
       "Read `min_kelvin`/`max_kelvin` off the bulb before proposing a colour temperature. Never assume " +
       "2700–6500: a value outside the bulb's real range is rejected SILENTLY by Home Assistant and the " +
-      "lamp simply doesn't move, which looks exactly like the request never landed.",
+      "lamp simply doesn't move, which looks exactly like the request never landed.\n\n" +
+      "`effects` is that same rule for animations: it is the ONLY list set_lamp will accept for this " +
+      "bulb, and anything outside it is dropped just as silently. `effect` is what it reports running, " +
+      "and it is reported lazily — null just after a write does not mean the effect never fired.",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
@@ -429,12 +433,21 @@ export const TOOLS: ToolDef[] = [
     name: "set_lamp",
     title: "Set one lamp (or all of them)",
     description:
-      "Change a single lamp: on/off, brightness, colour temperature or hue. The escape hatch behind the " +
-      "scenes, for when a scene is nearly right and one lamp is too bright.\n\n" +
+      "Change a single lamp: on/off, brightness, colour temperature or hue, and the bulb's built-in " +
+      "effects. The escape hatch behind the scenes, for when a scene is nearly right and one lamp is " +
+      "too bright.\n\n" +
       "COLOUR TEMPERATURE AND HUE ARE MUTUALLY EXCLUSIVE modes on these bulbs. Send one. If both are " +
       "sent, hue wins — but decide which you meant rather than relying on that.\n\n" +
       "Kelvin is clamped to the range the BULB reports (get_lamp shows it), not to a guessed 2700–6500. " +
       "Brightness is 1–100 percent; 0 is not off, use `on: false`.\n\n" +
+      "EFFECTS ARE PER-BULB AND MOSTLY MOMENTARY. Read `effects` off the lamp first (get_lamp / " +
+      "get_room list them) — an effect the bulb never advertised is dropped by Home Assistant in " +
+      "SILENCE, exactly like an out-of-range Kelvin. `blink`, `breathe`, `okay` and `channel_change` " +
+      "are Zigbee Identify animations: they run a short fixed sequence and stop by themselves, so " +
+      "they are NOT a mode the lamp sits in — do not offer one as a lasting candle or pulse setting. " +
+      "`colorloop` does run until `stop_colorloop`; `stop_effect` cancels now and `finish_effect` " +
+      "ends after the current cycle. The bulb reports `effect` lazily, so a null in the reading below " +
+      "is not evidence it failed — report what was sent, not that it is still running.\n\n" +
       "The result re-reads the lamp afterwards. If it comes back unreachable, the change did NOT happen " +
       "— the bulb has no power. Say so.",
     annotations: { readOnlyHint: false, idempotentHint: true },
@@ -450,6 +463,12 @@ export const TOOLS: ToolDef[] = [
           description: "[hue 0–360, saturation 0–100] — only for bulbs where supportsColor is true",
           items: { type: "number" },
         },
+        effect: {
+          type: "string",
+          description:
+            "one of the bulb's own `effects` (read it first). blink/breathe/okay/channel_change run " +
+            "once and stop; colorloop runs until stop_colorloop; stop_effect cancels immediately",
+        },
         transition: { type: "number", description: "fade in seconds, 0–300" },
       },
       required: ["entity_id"],
@@ -459,6 +478,7 @@ export const TOOLS: ToolDef[] = [
       const on = bool(a, "on");
       const brightness = num(a, "brightness");
       const kelvin = num(a, "kelvin");
+      const effect = str(a, "effect");
       const transition = num(a, "transition");
       const rawHs = a.hs;
       let hs: [number, number] | undefined;
@@ -468,9 +488,15 @@ export const TOOLS: ToolDef[] = [
         }
         hs = rawHs as [number, number];
       }
-      if (on === undefined && brightness === undefined && kelvin === undefined && hs === undefined) {
+      if (
+        on === undefined &&
+        brightness === undefined &&
+        kelvin === undefined &&
+        hs === undefined &&
+        effect === undefined
+      ) {
         throw new ToolError(
-          "Nothing to change — pass at least one of on, brightness, kelvin or hs. " +
+          "Nothing to change — pass at least one of on, brightness, kelvin, hs or effect. " +
             "To read a lamp without changing it, use get_lamp.",
         );
       }
@@ -502,6 +528,17 @@ export const TOOLS: ToolDef[] = [
                 `lamp simply does not move.`,
             );
           }
+          // Same silent-drop failure as an out-of-range Kelvin, so refuse here
+          // rather than let the bulb sit still while the call reports success.
+          // Only when the list is actually known — an empty one means the app
+          // did not tell us, and the app checks again anyway.
+          const offered = lamp.effects ?? [];
+          if (effect !== undefined && offered.length > 0 && !offered.includes(effect)) {
+            throw new ToolError(
+              `${lamp.name} does not offer a "${effect}" effect. It advertises: ${offered.join(", ")}. ` +
+                `An effect outside that list is dropped silently and the lamp does not move.`,
+            );
+          }
           entityIds = [lamp.entityId];
         }
 
@@ -511,6 +548,7 @@ export const TOOLS: ToolDef[] = [
           ...(brightness !== undefined ? { brightness } : {}),
           ...(kelvin !== undefined ? { kelvin } : {}),
           ...(hs ? { hs } : {}),
+          ...(effect !== undefined ? { effect } : {}),
           ...(transition !== undefined ? { transition } : {}),
         });
         return {

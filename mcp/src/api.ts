@@ -99,6 +99,13 @@ export type Lamp = {
   hs: [number, number] | null;
   supportsColor: boolean;
   colorMode: string | null;
+  /** Effects this bulb advertises — blink, breathe, colorloop, stop_effect, …
+   *  Per-bulb: an effect absent from this list is dropped by Home Assistant in
+   *  silence, so it is the only honest source for what can be asked for. */
+  effects: string[];
+  /** The effect it reports running, null when idle. Reported lazily, so a null
+   *  here right after a write is not evidence the effect did not fire. */
+  effect: string | null;
   /** The room the app groups it under, already resolved by the state route. */
   room?: string;
 };
@@ -179,6 +186,8 @@ export const api = {
     request<{
       ok: true; read_at: string; lamps: Lamp[]; unreachable: string[];
       fully_applied: boolean; summary: string;
+      /** Only present when an effect was sent — what it will and won't do. */
+      effect_note?: string;
     }>("POST", "/lamp", body),
 
   sceneMeta: (body: Record<string, unknown>) =>

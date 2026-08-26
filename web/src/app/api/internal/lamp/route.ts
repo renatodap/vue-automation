@@ -13,6 +13,7 @@ type Body = {
   brightness?: number;
   kelvin?: number;
   hs?: [number, number];
+  effect?: string;
   transition?: number;
 };
 
@@ -25,6 +26,11 @@ type Body = {
  * with no screen has no other way to find out that the bulb it just addressed
  * has no power, and reporting "done" over a lamp that never moved is the exact
  * failure this codebase refuses to have.
+ *
+ * `effect` is checked against the bulb's OWN advertised list for the same
+ * reason Kelvin is clamped against the bulb's own range: Home Assistant drops
+ * an effect the bulb never offered without saying so, and a silent drop is
+ * indistinguishable from a call that never landed.
  */
 export async function POST(req: Request): Promise<Response> {
   if (!internalSecretOk(req)) return unauthorized();
@@ -59,6 +65,10 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
+    // What the addressed bulbs were doing before the write. Kept because the
+    // effect check below needs each bulb's own advertised list.
+    const addressed = before.filter((l) => entityIds.includes(l.entityId));
+
     // The master controls drive every lamp in a SINGLE call: four sequential
     // round trips over a tailnet is visibly staggered, and the lamps change one
     // at a time like a wave.
@@ -67,6 +77,23 @@ export async function POST(req: Request): Promise<Response> {
       typeof body.transition === "number" && Number.isFinite(body.transition)
         ? Math.max(0, Math.min(300, body.transition))
         : undefined;
+    const effect =
+      typeof body.effect === "string" && body.effect.length > 0 ? body.effect : undefined;
+
+    // Refuse an effect the bulb does not advertise, BEFORE writing. Home
+    // Assistant accepts the call and drops the unknown effect in silence, so
+    // the lamp sits there unchanged and the caller is told it worked.
+    if (effect) {
+      const lacking = addressed.filter((l) => !l.effects.includes(effect));
+      if (lacking.length) {
+        const offered = [...new Set(addressed.flatMap((l) => l.effects))];
+        return badRequest(
+          `${lacking.map((l) => l.name).join(", ")} ` +
+            `${lacking.length === 1 ? "does" : "do"} not offer the "${effect}" effect. ` +
+            (offered.length ? `Offered here: ${offered.join(", ")}.` : "That bulb offers none at all."),
+        );
+      }
+    }
 
     if (body.on === false) {
       await callService("light", "turn_off", {
@@ -76,6 +103,7 @@ export async function POST(req: Request): Promise<Response> {
     } else {
       const data: Record<string, unknown> = { entity_id: entityId };
       if (transition !== undefined) data.transition = transition;
+      if (effect !== undefined) data.effect = effect;
       if (body.brightness !== undefined) {
         // Clamp before converting: HA silently rejects out-of-range values and
         // the lamp just doesn't change, which looks like the call didn't land.
@@ -111,6 +139,20 @@ export async function POST(req: Request): Promise<Response> {
       lamps: touched,
       unreachable,
       fully_applied: unreachable.length === 0,
+      // An effect is not a setting the bulb holds; most of these are Zigbee
+      // Identify animations that run once and stop by themselves. The bulb also
+      // reports `effect` lazily, so the reading above may still say null even
+      // though the lamp is visibly moving — do not call that a failure.
+      ...(effect
+        ? {
+            effect_note:
+              `Sent the "${effect}" effect. blink, breathe, okay and channel_change are Zigbee ` +
+              `Identify animations: they run a short fixed sequence and stop on their own, so this ` +
+              `is not a mode the lamp stays in. colorloop runs until stop_colorloop. The bulb ` +
+              `reports its effect lazily, so \`effect\` above may still read null — say what was ` +
+              `sent, not that it is still running.`,
+          }
+        : {}),
       summary: unreachable.length
         ? `${unreachable.join(", ")} could not be reached — a smart bulb is only smart while ` +
           `it has power. Say so rather than reporting the change as done.`

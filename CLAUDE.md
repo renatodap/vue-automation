@@ -73,7 +73,21 @@ cd mcp && npm run build && npm test    # if mcp/ was touched
     calls a change that landed a failure. Verify a write against a FRESH read a
     few seconds later, never against the response to the write itself.
 
-11. **The Tuya strip discards brightness sent alongside colour.** Brightness and
+11. **An effect the bulb never advertised is dropped in silence.** Same
+    failure shape as invariant 10's Kelvin: Home Assistant accepts the call,
+    the lamp does not move, and the caller is told it worked. `effect_list` is
+    per-bulb and is the only honest source — the ZL1 offers `blink`, `breathe`,
+    `okay`, `channel_change`, `finish_effect`, `stop_effect`, `colorloop`,
+    `stop_colorloop`. `/api/internal/lamp` refuses an unadvertised effect
+    before writing, and `set_lamp` refuses it before even calling the app.
+    Most of these are Zigbee *Identify* animations: they run a short fixed
+    sequence and stop by themselves, so none of them is a mode the lamp sits
+    in — `colorloop` is the only sustained one. Never offer `breathe` as a
+    lasting candle setting; a real flicker needs an automation that nudges
+    brightness, not an effect. The bulb also reports `effect` lazily, so a
+    `null` read straight after the write is not evidence it failed.
+
+12. **The Tuya strip discards brightness sent alongside colour.** Brightness and
     a colour temperature in one command — which is how every scene and every
     one-tap look applies — and it takes the colour and keeps its old brightness.
     Sent alone, it obeys instantly. `SPLIT_BRIGHTNESS` in `web/src/lib/ha.ts`

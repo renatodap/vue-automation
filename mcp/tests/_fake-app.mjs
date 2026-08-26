@@ -84,12 +84,22 @@ export function lampFixture() {
       entityId: "light.shelf_lamp", name: "Shelf lamp", reachable: true, on: true,
       brightness: 40, kelvin: 2700, minKelvin: 2000, maxKelvin: 6493,
       rgb: null, hs: null, supportsColor: true, colorMode: "color_temp",
+      // The ZL1's real list, verbatim. `breathe` and friends are Zigbee
+      // Identify animations; `colorloop` is the only sustained one.
+      effects: [
+        "blink", "breathe", "okay", "channel_change",
+        "finish_effect", "stop_effect", "colorloop", "stop_colorloop",
+      ],
+      effect: null,
       room: "living",
     },
     {
       entityId: "light.floor_lamp", name: "Floor lamp", reachable: false, on: false,
       brightness: null, kelvin: null, minKelvin: 2000, maxKelvin: 6493,
       rgb: null, hs: null, supportsColor: true, colorMode: null,
+      // A bulb with no power reports no attributes at all, effect_list
+      // included — so "no effects known" and "offers none" look identical here.
+      effects: [], effect: null,
       room: "unassigned",
     },
   ];
