@@ -1,8 +1,8 @@
 # Candle — Abajour + Shelf Lamp
 #
-# Paste into `automations.yaml` as-is (it is a two-item list), or paste ONE
-# item at a time into Settings → Automations → ⋮ → Edit in YAML, dropping the
-# leading `- `.
+# Paste into `automations.yaml` as-is (it is a two-item list), or use the
+# generated single-automation files beside this one for the UI's "Edit in
+# YAML" box, which expects one automation object and no leading `- `.
 #
 #
 # WHY THIS IS NOT 10 Hz
@@ -24,15 +24,30 @@
 # smooth movement without paying traffic for smoothness.
 #
 #
-# WHY TWO SEPARATE AUTOMATIONS
+# WHY THE LOOP IS `count:` AND NOT `while:`
 #
-# One loop driving both lamps would move them in lockstep, which is the one
-# thing two real flames never do. These draw their randomness independently AND
-# run on deliberately different periods (shelf ~1.4s, abajour ~1.65s), so they
-# drift through phase against each other — sometimes together, sometimes
-# opposed. That drift is the closest honest approximation of the in-phase /
-# anti-phase coupling the research describes, and it is what makes two lamps
-# read as two flames rather than one dimmer driving two bulbs.
+# It was `while:`, with three guards, one of them `{{ repeat.index <= 650 }}`.
+# That silently never ran: Home Assistant does NOT define the `repeat` variable
+# while it evaluates a `while`/`until` condition, so the guard tested an
+# undefined name and the loop exited before its first iteration. The automation
+# reported no error and the lamp simply never moved.
+#
+#   home-assistant/core#38117
+#
+# So the iteration cap is now the `count:` itself, and the two real guards are
+# condition STEPS at the top of the sequence. A condition step that fails stops
+# the script, which ends the repeat — and also, deliberately, skips the settle
+# below, which is exactly right: if the loop stopped because someone took the
+# lamp, the last thing it should do is grab it back.
+#
+#
+# WHY EACH `level` IS ONE SELF-CONTAINED TEMPLATE
+#
+# It used to be two `variables:` blocks, the second reading a `roll` defined in
+# the first. That works, but it is a needless dependency in a loop that runs
+# 650 times, and it is the second thing that would have failed silently. Each
+# level now rolls and buckets in a single expression, on ONE line so no YAML
+# folding can introduce whitespace into a value that gets `| int`-ed.
 #
 #
 # HOW TO RUN
@@ -40,9 +55,9 @@
 #   up. Or hit "Run" on either automation to light just that one.
 #
 # HOW TO STOP
-#   Turn the lamp off, or apply any other scene. Both are checked every
-#   iteration and each loop stands down rather than fighting you. Each also
-#   caps itself — a candle burns down, it does not run until reboot.
+#   Turn the lamp off, or apply any other scene. Both are checked at the top of
+#   every iteration and each loop stands down rather than fighting you. Both
+#   also cap themselves — a candle burns down, it does not run until reboot.
 #
 #
 # LIVING ROOM ONLY, deliberately. A whole apartment flickering reads as an
@@ -69,8 +84,11 @@
   conditions: []
 
   actions:
+    # ~650 iterations at ~1.4s each ≈ 15 minutes. The cap lives here, NOT in a
+    # guard — see the header note on repeat.index.
     - repeat:
-        while:
+        count: 650
+        sequence:
           # Stop the moment the lamp is switched off. At the wall the bulb goes
           # unavailable; from HA it goes off. Either way this must not keep
           # sending turn_on and fight the person holding the switch.
@@ -86,36 +104,25 @@
           # temperature clears hs_color entirely, and a bare default would read
           # as "still a flame" and keep the loop running against it.
           - condition: template
-            value_template: >-
-              {% set h = state_attr('light.shelf_lamp', 'hs_color') %}
-              {{ h is not none and 8 <= (h[0] | float(99)) <= 23 }}
+            value_template: "{% set h = state_attr('light.shelf_lamp','hs_color') %}{{ h is not none and 8 <= (h[0]|float(99)) <= 23 }}"
 
-          # Hard ceiling, ~15 minutes at this pacing.
-          - condition: template
-            value_template: "{{ repeat.index <= 650 }}"
-
-        sequence:
+          # NOT uniform. A flame sits near its top most of the time and dips
+          # occasionally. Uniform random across the whole band is constant
+          # agitation at every amplitude, which reads as a failing bulb rather
+          # than a flame — it is the single biggest tell.
+          #   68%  steady, barely moving    16-20
+          #   25%  a visible dip            12-15
+          #    7%  a deep gutter             9-11
+          # Floor is 9, not 7: below that the ZL1 is near its usable minimum
+          # and a gutter reads as the lamp cutting out.
           - variables:
-              roll: "{{ range(1, 101) | random }}"
-
-          - variables:
-              # NOT uniform. A flame sits near its top most of the time and
-              # dips occasionally. Uniform random across the whole band is
-              # constant agitation at every amplitude, which reads as a failing
-              # bulb rather than a flame — it is the single biggest tell.
-              #   68%  steady, barely moving
-              #   25%  a visible dip
-              #    7%  a deep gutter
-              # Floor is 9, not 7: below that the ZL1 is close to its usable
-              # minimum and a gutter reads as the lamp cutting out.
-              level: >-
-                {% if roll | int <= 68 %}{{ range(16, 21) | random }}{% elif roll | int <= 93 %}{{ range(12, 16) | random }}{% else %}{{ range(9, 12) | random }}{% endif %}
+              level: "{% set roll = range(1,101)|random %}{% if roll <= 68 %}{{ range(16,21)|random }}{% elif roll <= 93 %}{{ range(12,16)|random }}{% else %}{{ range(9,12)|random }}{% endif %}"
 
           - action: light.turn_on
             target:
               entity_id: light.shelf_lamp
             data:
-              brightness_pct: "{{ level | int }}"
+              brightness_pct: "{{ level|int }}"
 
               # Colour tracks brightness instead of wandering independently: a
               # flame goes deeper red as it drops and opens up as it recovers.
@@ -124,37 +131,27 @@
               #   level  9 →  hue 12.0, sat 99.0   (deep ember)
               #   level 20 →  hue 19.0, sat 93.0   (open flame)
               hs_color:
-                - "{{ (12 + (level | int - 9) * 0.636) | round(1) }}"
-                - "{{ (99 - (level | int - 9) * 0.545) | round(1) }}"
+                - "{{ (12 + (level|int - 9) * 0.636)|round(1) }}"
+                - "{{ (99 - (level|int - 9) * 0.545)|round(1) }}"
 
               # Guttering is ASYMMETRIC — a flame drops fast and recovers
               # slowly. Deep dips snap in a third of a second; everything else
               # eases over a second or more. This asymmetry is most of what
               # sells it; a symmetric fade reads as a dimmer being swept.
-              transition: "{{ 0.3 if level | int < 12 else (range(10, 17) | random) / 10 }}"
+              transition: "{{ 0.3 if level|int < 12 else (range(10,17)|random) / 10 }}"
 
           - delay:
-              milliseconds: "{{ range(900, 1900) | random }}"
+              milliseconds: "{{ range(900,1900)|random }}"
 
-    # Settle back to where this lamp sits in the room's gradient — but ONLY if
-    # the loop ran out on its own. If it stopped because the lamp was switched
-    # off or a scene took over, this must not reach out and undo that.
-    - if:
-        - condition: state
-          entity_id: light.shelf_lamp
-          state: "on"
-        - condition: template
-          value_template: >-
-            {% set h = state_attr('light.shelf_lamp', 'hs_color') %}
-            {{ h is not none and 8 <= (h[0] | float(99)) <= 23 }}
-      then:
-        - action: light.turn_on
-          target:
-            entity_id: light.shelf_lamp
-          data:
-            brightness_pct: 15
-            hs_color: [15.9, 94.5]
-            transition: 4
+    # Only reached if all 650 iterations ran — a failed guard above stops the
+    # script outright, so this cannot fire after someone has taken the lamp.
+    - action: light.turn_on
+      target:
+        entity_id: light.shelf_lamp
+      data:
+        brightness_pct: 15
+        hs_color: [15.9, 94.5]
+        transition: 4
 
 # ---------------------------------------------------------------------------
 - alias: Candle — Abajour
@@ -173,8 +170,10 @@
   conditions: []
 
   actions:
+    # ~550 iterations at ~1.65s each ≈ 15 minutes.
     - repeat:
-        while:
+        count: 550
+        sequence:
           - condition: state
             entity_id: light.abajour
             state: "on"
@@ -184,55 +183,36 @@
           # lamp's flame range on purpose, so a scene that pushes the abajour
           # down to a deep ember still counts as someone else claiming it.
           - condition: template
-            value_template: >-
-              {% set h = state_attr('light.abajour', 'hs_color') %}
-              {{ h is not none and 17 <= (h[0] | float(99)) <= 33 }}
+            value_template: "{% set h = state_attr('light.abajour','hs_color') %}{{ h is not none and 17 <= (h[0]|float(99)) <= 33 }}"
 
-          - condition: template
-            value_template: "{{ repeat.index <= 550 }}"
-
-        sequence:
+          # Same 68/25/7 shape, one stop brighter throughout — the abajour is
+          # the lamp that actually lights the room, and dropping it into the
+          # shelf lamp's ember range would darken the whole space rather than
+          # read as a flame.
           - variables:
-              roll: "{{ range(1, 101) | random }}"
-
-          - variables:
-              # Same 68/25/7 shape, one stop brighter throughout — the abajour
-              # is the lamp that actually lights the room, and dropping it to
-              # the shelf lamp's ember range would darken the whole space
-              # rather than read as a flame.
-              level: >-
-                {% if roll | int <= 68 %}{{ range(21, 27) | random }}{% elif roll | int <= 93 %}{{ range(16, 21) | random }}{% else %}{{ range(12, 16) | random }}{% endif %}
+              level: "{% set roll = range(1,101)|random %}{% if roll <= 68 %}{{ range(21,27)|random }}{% elif roll <= 93 %}{{ range(16,21)|random }}{% else %}{{ range(12,16)|random }}{% endif %}"
 
           - action: light.turn_on
             target:
               entity_id: light.abajour
             data:
-              brightness_pct: "{{ level | int }}"
+              brightness_pct: "{{ level|int }}"
               #   level 12 →  hue 19.0, sat 96.0
               #   level 26 →  hue 28.0, sat 87.0
               hs_color:
-                - "{{ (19 + (level | int - 12) * 0.643) | round(1) }}"
-                - "{{ (96 - (level | int - 12) * 0.643) | round(1) }}"
-              transition: "{{ 0.3 if level | int < 16 else (range(11, 18) | random) / 10 }}"
+                - "{{ (19 + (level|int - 12) * 0.643)|round(1) }}"
+                - "{{ (96 - (level|int - 12) * 0.643)|round(1) }}"
+              transition: "{{ 0.3 if level|int < 16 else (range(11,18)|random) / 10 }}"
 
           # Longer than the shelf lamp's 900-1900ms. The offset is the point:
           # two flames on the same period would beat together forever.
           - delay:
-              milliseconds: "{{ range(1100, 2200) | random }}"
+              milliseconds: "{{ range(1100,2200)|random }}"
 
-    - if:
-        - condition: state
-          entity_id: light.abajour
-          state: "on"
-        - condition: template
-          value_template: >-
-            {% set h = state_attr('light.abajour', 'hs_color') %}
-            {{ h is not none and 17 <= (h[0] | float(99)) <= 33 }}
-      then:
-        - action: light.turn_on
-          target:
-            entity_id: light.abajour
-          data:
-            brightness_pct: 24
-            hs_color: [24.9, 90.6]
-            transition: 4
+    - action: light.turn_on
+      target:
+        entity_id: light.abajour
+      data:
+        brightness_pct: 24
+        hs_color: [24.9, 90.6]
+        transition: 4
