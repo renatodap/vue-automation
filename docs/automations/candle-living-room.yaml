@@ -60,6 +60,7 @@
     then settles back to its place in the room's orange gradient.
   mode: restart
   max_exceeded: silent
+  initial_state: true
 
   triggers:
     - trigger: event
@@ -163,6 +164,7 @@
     ~0.6 Zigbee commands/sec, ~15 minutes, then settles.
   mode: restart
   max_exceeded: silent
+  initial_state: true
 
   triggers:
     - trigger: event

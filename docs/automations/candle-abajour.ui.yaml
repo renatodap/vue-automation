@@ -1,0 +1,79 @@
+alias: Candle — Abajour
+description: >-
+  Open-amber flame on the abajour, running on a longer period than the shelf
+  lamp so the two drift through phase instead of pulsing in lockstep.
+  ~0.6 Zigbee commands/sec, ~15 minutes, then settles.
+mode: restart
+max_exceeded: silent
+initial_state: true
+
+triggers:
+  - trigger: event
+    event_type: candle_start
+
+conditions: []
+
+actions:
+  - repeat:
+      while:
+        - condition: state
+          entity_id: light.abajour
+          state: "on"
+
+        # Band is 17-33 rather than 8-23: this lamp carries the warmer, more
+        # open end of the gradient. The lower bound sits above the shelf
+        # lamp's flame range on purpose, so a scene that pushes the abajour
+        # down to a deep ember still counts as someone else claiming it.
+        - condition: template
+          value_template: >-
+            {% set h = state_attr('light.abajour', 'hs_color') %}
+            {{ h is not none and 17 <= (h[0] | float(99)) <= 33 }}
+
+        - condition: template
+          value_template: "{{ repeat.index <= 550 }}"
+
+      sequence:
+        - variables:
+            roll: "{{ range(1, 101) | random }}"
+
+        - variables:
+            # Same 68/25/7 shape, one stop brighter throughout — the abajour
+            # is the lamp that actually lights the room, and dropping it to
+            # the shelf lamp's ember range would darken the whole space
+            # rather than read as a flame.
+            level: >-
+              {% if roll | int <= 68 %}{{ range(21, 27) | random }}{% elif roll | int <= 93 %}{{ range(16, 21) | random }}{% else %}{{ range(12, 16) | random }}{% endif %}
+
+        - action: light.turn_on
+          target:
+            entity_id: light.abajour
+          data:
+            brightness_pct: "{{ level | int }}"
+            #   level 12 →  hue 19.0, sat 96.0
+            #   level 26 →  hue 28.0, sat 87.0
+            hs_color:
+              - "{{ (19 + (level | int - 12) * 0.643) | round(1) }}"
+              - "{{ (96 - (level | int - 12) * 0.643) | round(1) }}"
+            transition: "{{ 0.3 if level | int < 16 else (range(11, 18) | random) / 10 }}"
+
+        # Longer than the shelf lamp's 900-1900ms. The offset is the point:
+        # two flames on the same period would beat together forever.
+        - delay:
+            milliseconds: "{{ range(1100, 2200) | random }}"
+
+  - if:
+      - condition: state
+        entity_id: light.abajour
+        state: "on"
+      - condition: template
+        value_template: >-
+          {% set h = state_attr('light.abajour', 'hs_color') %}
+          {{ h is not none and 17 <= (h[0] | float(99)) <= 33 }}
+    then:
+      - action: light.turn_on
+        target:
+          entity_id: light.abajour
+        data:
+          brightness_pct: 24
+          hs_color: [24.9, 90.6]
+          transition: 4
