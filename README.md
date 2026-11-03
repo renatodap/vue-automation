@@ -50,6 +50,16 @@ Before pushing anything non-trivial:
 cd web && npx tsc --noEmit && npm run build
 ```
 
+## Permanent history
+
+The History tab reads permanent lamp/scene observations and any discovered
+temperature or humidity sensors from the app's own database. Deterministic
+suggestions use repeated behavior; current controls always read Home Assistant.
+Collection needs the history migration and `npm run start:history` in production
+(or the separate `history:watch` worker). It does not start merely because a
+browser opens History. See [the operations guide](docs/history-audit.md) for
+backfill, gap recovery, retention limits, tests and the live inventory report.
+
 ## Deploy
 
 Push to `main`. Coolify rebuilds via webhook. Env vars live in Coolify, not

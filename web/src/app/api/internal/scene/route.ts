@@ -116,11 +116,11 @@ async function apply(body: Body): Promise<Response> {
   if (typeof body.transition === "number" && Number.isFinite(body.transition)) {
     data.transition = Math.max(0, Math.min(300, body.transition));
   }
-  await callService("scene", "turn_on", data);
+  const changed = await callService("scene", "turn_on", data);
 
   // Best-effort, never blocking the answer — a failed history write must not
   // fail a scene that already applied.
-  void recordTap(entityId);
+  void recordTap(entityId, changed.find(s => s.entity_id === entityId));
 
   const after = toLamps(await getStates());
   const report = applyReport(targets, after);

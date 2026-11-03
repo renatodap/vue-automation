@@ -18,6 +18,8 @@ export type HaState = {
   state: string;
   attributes: Record<string, unknown>;
   last_changed: string;
+  last_updated?: string;
+  context?: { id?: string | null; parent_id?: string | null; user_id?: string | null };
 };
 
 export class HaUnreachableError extends Error {

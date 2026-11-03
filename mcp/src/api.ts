@@ -11,6 +11,7 @@
  * This file is transport, not logic.
  */
 import { appInternalUrl, internalSecret } from "./env.js";
+import type { HistoryOptions, RoomInsightOptions } from "./history-input.js";
 
 export class ApiError extends Error {
   /** The app's own HTTP status, so a caller can tell input from outage. */
@@ -75,7 +76,9 @@ async function request<T>(
     const msg =
       parsed && typeof parsed === "object" && "error" in parsed
         ? String((parsed as { error: unknown }).error)
-        : `The lighting app returned HTTP ${res.status}.`;
+        : parsed && typeof parsed === "object" && "message" in parsed
+          ? String((parsed as { message: unknown }).message)
+          : `The lighting app returned HTTP ${res.status}.`;
     // A 4xx here is nearly always the caller's input (an entity that no longer
     // exists, a malformed colour, a scene with no editable id) — surfacing the
     // app's own message lets the model fix it and retry rather than guess.
@@ -160,6 +163,14 @@ export type ApplyResponse = {
   lamps: Lamp[];
 };
 
+function historyQuery(options: HistoryOptions): string {
+  const query = new URLSearchParams({ start: options.start, end: options.end, limit: String(options.limit) });
+  if (options.entity_id !== undefined) query.set("entity_id", options.entity_id);
+  if (options.room !== undefined) query.set("room", options.room);
+  if (options.cursor !== undefined) query.set("cursor", options.cursor);
+  return query.toString();
+}
+
 export const api = {
   /** Everything about the house, in one round trip. */
   state: () => request<StateResponse>("GET", "/state"),
@@ -223,6 +234,18 @@ export const api = {
 
   history: (days: number) =>
     request<Record<string, unknown>>("GET", `/history?days=${encodeURIComponent(String(days))}`),
+
+  lampHistory: (options: HistoryOptions) =>
+    request<Record<string, unknown>>("GET", `/lamp-history?${historyQuery(options)}`),
+
+  climateHistory: (options: HistoryOptions) =>
+    request<Record<string, unknown>>("GET", `/climate-history?${historyQuery(options)}`),
+
+  roomInsights: (options: RoomInsightOptions) => {
+    const query = new URLSearchParams({ days: String(options.days) });
+    if (options.room !== undefined) query.set("room", options.room);
+    return request<Record<string, unknown>>("GET", `/room-insights?${query}`);
+  },
 
   query: (query: string, maxRows: number) =>
     request<Record<string, unknown>>("POST", "/query", { query, max_rows: maxRows }),

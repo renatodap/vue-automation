@@ -39,11 +39,11 @@ export async function POST(request: NextRequest) {
     const before = toLamps(states);
     const unreachableBefore = before.filter((l) => !l.reachable);
 
-    await callService("scene", "turn_on", { entity_id: entityId });
+    const changed = await callService("scene", "turn_on", { entity_id: entityId });
     await reapplySplitBrightness(entityId, states);
 
     // Best-effort, never blocking the response.
-    void recordTap(entityId);
+    void recordTap(entityId, changed.find(s => s.entity_id === entityId));
 
     return NextResponse.json({
       ok: true,

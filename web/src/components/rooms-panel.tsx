@@ -1,11 +1,11 @@
 "use client";
 
 import { Lightbulb, LightbulbOff, Power, WifiOff } from "lucide-react";
-import { postJson } from "@/lib/client";
 import { lampCss } from "@/lib/light-color";
 import { LOOKS, groupByRoom, lookPatch, type LookId } from "@/lib/rooms";
-import type { LampPatch, LampView, SceneView } from "@/lib/types";
+import type { LampPatch, LampView } from "@/lib/types";
 import { useHouse } from "./house";
+import { RoomHistoryNote, SuggestedScene } from "./history-suggestions";
 import { Banner, Disconnected, Empty, Section } from "./ui";
 
 /** Four is what fits across a phone without the buttons becoming targets. */
@@ -20,7 +20,7 @@ const MAX_SPOTLIT = 4;
  * nowhere to put a bedroom. A list scales; a photograph does not.
  */
 export function RoomsPanel() {
-  const { state, lamps, pending, load, flash, remember, act, sendPatches } = useHouse();
+  const { state, lamps, pending, load, flash, remember, activateScene, sendPatches } = useHouse();
 
   if (state && !state.ok) return <Disconnected message={state.message} onRetry={load} />;
 
@@ -28,22 +28,6 @@ export function RoomsPanel() {
     ? state.scenes.filter((s) => s.spotlight).slice(0, MAX_SPOTLIT)
     : [];
   const groups = groupByRoom(lamps);
-
-  const applyScene = (scene: SceneView) => {
-    remember(scene.label);
-    return act(scene.entityId, async () => {
-      const r = await postJson<{ unreachable: string[] }>("/api/scene", {
-        entityId: scene.entityId,
-      });
-      // Home Assistant applies a scene to what it can reach and says nothing
-      // about the rest, and silence reads as success.
-      flash(
-        r.unreachable.length
-          ? `${scene.label} — couldn't reach ${r.unreachable.join(", ")}`
-          : scene.label,
-      );
-    });
-  };
 
   /** One look across a set of lamps, as a single grouped call. */
   const applyLook = (key: string, targets: LampView[], look: LookId, what: string) => {
@@ -85,6 +69,8 @@ export function RoomsPanel() {
         </Banner>
       )}
 
+      <SuggestedScene />
+
       {/* The scenes worth reaching without changing tabs. Deliberately at the
           very top and deliberately small: this is a shortcut, not the scene
           list, and it should never out-shout the room it sits above. */}
@@ -93,7 +79,7 @@ export function RoomsPanel() {
           {spotlit.map((s) => (
             <button
               key={s.entityId}
-              onClick={() => void applyScene(s)}
+              onClick={() => void activateScene(s)}
               disabled={pending === s.entityId}
               className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 rounded-[var(--r-pill)] text-[12px] font-medium transition-all active:scale-95 disabled:opacity-50"
               style={{
@@ -139,6 +125,8 @@ export function RoomsPanel() {
                   {on === 0 ? "All off" : `${on} of ${inRoom.length} on`}
                 </span>
               </div>
+
+              <RoomHistoryNote room={room.id} />
 
               {/* The room as one thing: power, then the three looks. */}
               <div className="grid grid-cols-4 gap-1.5 p-2.5">

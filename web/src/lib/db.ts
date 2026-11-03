@@ -6,7 +6,7 @@ import { databaseUrl } from "./env";
  * Shared Postgres on the Persimmon box — this app owns one database inside it.
  *
  * The database is deliberately optional. It stores presentation metadata and
- * tap history, never light state; Home Assistant is the source of truth for
+ * tap history and historical observations, never CURRENT light state; HA is the source of truth for
  * what the lamps are actually doing. If Postgres is down the app must still
  * turn on the lights, so every read here has a fallback and every write is
  * best-effort.
@@ -18,7 +18,9 @@ export function db() {
   const url = databaseUrl();
   if (!url) return null;
   if (!client) {
-    client = postgres(url, {
+    const parsed = new URL(url);
+    parsed.searchParams.delete("schema");
+    client = postgres(parsed.toString(), {
       max: 4,
       idle_timeout: 20,
       connect_timeout: 10,
@@ -149,7 +151,7 @@ export async function forgetScene(entityId: string): Promise<void> {
 }
 
 /** Fire-and-forget: a failed analytics write must never fail the user's tap. */
-export async function recordTap(entityId: string): Promise<void> {
+export async function recordTap(entityId: string, activation?: { state: string; context?: { id?: string | null; parent_id?: string | null; user_id?: string | null } }): Promise<void> {
   const sql = db();
   if (!sql) return;
   try {
@@ -158,6 +160,16 @@ export async function recordTap(entityId: string): Promise<void> {
       ON CONFLICT (entity_id) DO NOTHING
     `;
     await sql`INSERT INTO scene_tap (entity_id) VALUES (${entityId})`;
+    // Independent of scene_meta's cascading delete. Exact HA activation time
+    // deduplicates the worker/REST observations; otherwise preserve a tap as a
+    // tap (its provenance does not promise the scene changed every lamp).
+    try {
+      const at = activation && /^\d{4}-\d{2}-\d{2}T/.test(activation.state) && Number.isFinite(Date.parse(activation.state)) ? activation.state : new Date().toISOString();
+      await sql`INSERT INTO scene_application(entity_id,at,source,context_id,context_parent_id,context_user_id,origin)
+        VALUES (${entityId},${at}::text::timestamptz,${activation?.context?.user_id ? 'user' : 'unknown'},
+          ${activation?.context?.id ?? null},${activation?.context?.parent_id ?? null},${activation?.context?.user_id ?? null},${activation ? 'app' : 'legacy_tap'})
+        ON CONFLICT(entity_id,at) DO NOTHING`;
+    } catch { /* Additive migration can follow the app; lighting remains available. */ }
   } catch {
     // Intentionally swallowed.
   }
