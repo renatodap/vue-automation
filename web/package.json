@@ -5,13 +5,14 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/start-with-history.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "tsx --conditions=react-server --test tests/*.test.ts",
     "history:sync": "tsx --conditions=react-server scripts/history-sync.ts",
     "history:watch": "tsx --conditions=react-server scripts/history-worker.ts",
-    "start:history": "node scripts/start-with-history.mjs"
+    "start:history": "node scripts/start-with-history.mjs",
+    "start:next": "next start"
   },
   "dependencies": {
     "clsx": "^2.1.1",
