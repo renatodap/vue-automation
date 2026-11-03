@@ -123,10 +123,29 @@ Reads (all `readOnlyHint: true`, so a client can auto-approve them):
 | `get_lamp(entity_id)` | one lamp, including the range that bulb can actually tune to |
 | `get_schedules(include_config?)` | automations, enabled state, last fired |
 | `get_history(days)` | tap history: per scene, by hour, most recent |
+| `get_lamp_history(entity_id?, room?, start?, end?, limit?, cursor?)` | recorded lamp changes, including remotes and automations; bounded pages with coverage |
+| `get_climate_history(entity_id?, room?, start?, end?, limit?, cursor?)` | recorded temperature and humidity observations, units and coverage |
+| `get_room_insights(room?, days?)` | lighting and climate summaries with uncertainty, collection gaps and explained anomalies |
 | `list_zigbee_devices` | the mesh itself, from HA's device registry |
 | `poll_pairing(since?)` | devices that appeared since `start_pairing` snapshotted the registry |
 | `list_pending_changes` | proposals awaiting approval — diffs, never tokens |
 | `query_sql(query, max_rows?)` | last-resort read-only SQL over the three metadata tables |
+
+Historical reads are dedicated **GET-only** internal app routes, never a Home
+Assistant command or SQL escape hatch. Lamp and climate history default to the
+last seven days, accept a maximum 31-day window, and return at most 1000 rows
+per page (default 500). Pass explicit ISO timestamps with timezones; reuse the
+returned window and filters with `nextCursor` to continue. Room insights default
+to 30 days and cap requests at 90. Room filters are `living`, `bedroom` or
+`unassigned`; entity filters require exact `light.*` identifiers for lamps, or
+`sensor.*` / `climate.*` for climate observations.
+
+The connector relays coverage and gaps intact. Historical observations are
+never current state, and unavailable storage is an error rather than an empty
+history. `get_history` continues to mean scene taps. All three new reads use the
+same per-call audit path as the other tools. The connector's existing Home
+Assistant WebSocket is a short registry request, **not** a persistent
+`state_changed` subscription or a history collector.
 
 Writes — named mutations with typed arguments, no generic writer:
 

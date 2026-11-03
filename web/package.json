@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --conditions=react-server --test tests/*.test.ts",
+    "history:sync": "tsx --conditions=react-server scripts/history-sync.ts",
+    "history:watch": "tsx --conditions=react-server scripts/history-worker.ts",
+    "start:history": "node scripts/start-with-history.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -18,7 +22,8 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "server-only": "^0.0.1",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.14",

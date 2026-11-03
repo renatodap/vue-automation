@@ -82,7 +82,12 @@ const INSTRUCTIONS =
   "  • 'stop that schedule' → set_schedule_enabled(false) first. Pausing is reversible; deleting is not, " +
   "and people usually mean pause.\n" +
   "  • 'which scenes do I actually use' → get_history. query_sql only for a genuinely novel question " +
-  "about that history that no named tool answers.\n\n" +
+  "about that tap history that no named tool answers.\n" +
+  "  • 'when did this lamp change', including remotes and automations → get_lamp_history.\n" +
+  "  • past room temperature or humidity → get_climate_history.\n" +
+  "  • lighting patterns, climate summaries or unusual observations → get_room_insights. Historical " +
+  "observations never establish the current state. Report coverage gaps and uncertainty; missing " +
+  "history is unknown, never proof that nothing happened.\n\n" +
 
   "DESTRUCTIVE CHANGES GO THROUGH A DIFF. Deleting a scene or a schedule, and overwriting a scene's " +
   "stored definition, are irreversible. Call the matching propose_* tool, SHOW THE USER THE DIFF IT " +
@@ -101,7 +106,8 @@ const INSTRUCTIONS =
   "never by number: `light.lamp_3` is unreadable a month later and every scene references these names.\n\n" +
 
   "WHAT THIS CONNECTOR DOES NOT OWN. Home Assistant owns which scenes exist and what the lamps are " +
-  "doing. The app's database only stores labels, accents, ordering, aliases and tap history. If that " +
+  "doing. The app's database stores labels, accents, ordering, aliases, taps and historical " +
+  "observations; none of those observations is authoritative current state. If that " +
   "database is unavailable the lights still work — say that plainly rather than reporting the house as " +
   "broken, and note that labels have fallen back to Home Assistant's own names.";
 

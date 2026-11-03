@@ -6,6 +6,7 @@ import { postJson } from "@/lib/client";
 import type { LampPatch, SceneView } from "@/lib/types";
 import { patchFromLamp, useHouse } from "./house";
 import { SceneEditor } from "./scene-editor";
+import { SuggestedScene } from "./history-suggestions";
 import { Disconnected } from "./ui";
 
 /** Hold a scene this long and it becomes a preview instead of a commitment. */
@@ -19,7 +20,7 @@ const PREVIEW_MS = 400;
  * which scene, and what does it do.
  */
 export function ScenesPanel() {
-  const { state, lamps, pending, load, flash, act, remember } = useHouse();
+  const { state, lamps, pending, load, flash, act, activateScene } = useHouse();
 
   const [saving, setSaving] = useState(false);
   const [sceneName, setSceneName] = useState("");
@@ -28,24 +29,6 @@ export function ScenesPanel() {
   /** What the room was before a preview started, so release puts it back. */
   const preview = useRef<{ entityId: string; patches: LampPatch[] } | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const activate = (scene: SceneView) => {
-    // Snapshot before, not after: a scene is the most destructive single tap in
-    // the app, and being able to take it back is what makes trying one cheap.
-    remember(scene.label);
-    return act(scene.entityId, async () => {
-      const r = await postJson<{ unreachable: string[] }>("/api/scene", {
-        entityId: scene.entityId,
-      });
-      // Report partial application — HA applies a scene to what it can reach
-      // and stays silent about the rest, and silence reads as success.
-      flash(
-        r.unreachable.length
-          ? `${scene.label} — couldn't reach ${r.unreachable.join(", ")}`
-          : scene.label,
-      );
-    });
-  };
 
   /**
    * Press and hold to try a scene; release to put the room back.
@@ -78,7 +61,7 @@ export function ScenesPanel() {
       // the pointer away is not somebody asking for a scene.
       clearTimeout(holdTimer.current);
       holdTimer.current = null;
-      if (apply) void activate(scene);
+      if (apply) void activateScene(scene);
       return;
     }
     const held = preview.current;
@@ -118,6 +101,7 @@ export function ScenesPanel() {
 
   return (
     <div className="grid grid-cols-2 gap-2">
+      <div className="col-span-2 empty:hidden"><SuggestedScene /></div>
       {state.scenes.map((s) => (
         <div key={s.entityId} className="relative">
           <button
@@ -133,7 +117,7 @@ export function ScenesPanel() {
             // Pointer events skip the keyboard entirely, and this is the app's
             // primary control — it has to work from a keyboard.
             onKeyUp={(e) => {
-              if (e.key === "Enter" || e.key === " ") void activate(s);
+              if (e.key === "Enter" || e.key === " ") void activateScene(s);
             }}
             disabled={pending === s.entityId}
             className="w-full flex items-center gap-2 pl-3 rounded-[var(--r-md)] text-left transition-all active:scale-[0.97]"

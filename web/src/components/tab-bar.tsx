@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Clock, House, LayoutGrid, Lightbulb } from "lucide-react";
+import { Clock, History, House, LayoutGrid, Lightbulb } from "lucide-react";
 
 /**
  * The app's third grid row.
@@ -19,6 +19,7 @@ import { Clock, House, LayoutGrid, Lightbulb } from "lucide-react";
 const TABS = [
   { href: "/", label: "Home", Icon: House },
   { href: "/scenes", label: "Scenes", Icon: LayoutGrid },
+  { href: "/history", label: "History", Icon: History },
   { href: "/schedules", label: "Schedules", Icon: Clock },
   { href: "/devices", label: "Devices", Icon: Lightbulb },
 ] as const;
@@ -37,7 +38,7 @@ export function TabBar() {
             className="tab"
             data-active={active || undefined}
             aria-current={active ? "page" : undefined}
-            // Prefetch is on by default and is the right call here: four routes,
+            // Prefetch is on by default and is the right call here: five routes,
             // all tiny, and a tab that hesitates feels like a web page.
           >
             <Icon size={19} aria-hidden />

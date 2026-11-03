@@ -10,7 +10,8 @@ import {
   useState,
 } from "react";
 import { apiUrl, postJson } from "@/lib/client";
-import type { CopyResponse, LampPatch, LampView, StateResponse } from "@/lib/types";
+import type { InsightsResponse } from "@/lib/history-types";
+import type { CopyResponse, LampPatch, LampView, SceneView, StateResponse } from "@/lib/types";
 
 /** How often to re-read state while the app is actually on screen. */
 const POLL_MS = 6_000;
@@ -33,6 +34,10 @@ export type Undoable = { label: string; patches: LampPatch[]; at: number };
 type House = {
   /** null until the first read lands — "Connecting…", not "everything is off". */
   state: StateResponse | null;
+  /** When the latest successful live state read arrived. Never persisted. */
+  stateReadAt: number | null;
+  insights: Extract<InsightsResponse, { ok: true }> | null;
+  insightsReadAt: number | null;
   /** Server truth with any in-flight intent painted on top. */
   lamps: LampView[];
   reachable: LampView[];
@@ -50,6 +55,7 @@ type House = {
   act: (key: string, run: () => Promise<void>, message?: string) => Promise<void>;
   /** Remember the room, so whatever happens next can be taken back. */
   remember: (label: string) => void;
+  activateScene: (scene: SceneView) => Promise<void>;
   revert: () => Promise<void>;
   dismissUndo: () => void;
   setLamp: (lamp: LampView, patch: Omit<LampPatch, "entityId">) => Promise<void>;
@@ -76,7 +82,7 @@ export function useHouse(): House {
 }
 
 /**
- * One poller, one copy of the room, one undo stack — shared by all four tabs.
+ * One poller, one copy of the room, one undo stack — shared by all tabs.
  *
  * Mounted in the tab layout rather than in each page so switching tabs is
  * instant and silent: a per-page fetch would flash "Connecting…" every time the
@@ -88,6 +94,9 @@ export function useHouse(): House {
  */
 export function HouseProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<StateResponse | null>(null);
+  const [stateReadAt, setStateReadAt] = useState<number | null>(null);
+  const [insights, setInsights] = useState<Extract<InsightsResponse, { ok: true }> | null>(null);
+  const [insightsReadAt, setInsightsReadAt] = useState<number | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [undo, setUndo] = useState<Undoable | null>(null);
@@ -153,8 +162,10 @@ export function HouseProvider({ children }: { children: React.ReactNode }) {
       }
       const fresh = (await response.json()) as StateResponse;
       setState(fresh);
+      setStateReadAt(fresh.ok ? Date.now() : null);
       reconcile(fresh);
     } catch {
+      setStateReadAt(null);
       setState({
         ok: false,
         reason: "unreachable",
@@ -188,6 +199,46 @@ export function HouseProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [load]);
+
+  // History is optional. A failed insight read never delays a live-state read
+  // or any lamp action, and no historical row is projected onto a lamp.
+  useEffect(() => {
+    let stopped = false;
+    let request: AbortController | null = null;
+    const refresh = async () => {
+      if (document.visibilityState !== "visible") return;
+      request?.abort();
+      const controller = new AbortController();
+      request = controller;
+      try {
+        const response = await fetch(apiUrl("/api/insights?days=30"), {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("Insights unavailable");
+        const data = (await response.json()) as InsightsResponse;
+        if (!stopped && !controller.signal.aborted) {
+          setInsights(data.ok ? data : null);
+          setInsightsReadAt(data.ok ? Date.now() : null);
+        }
+      } catch {
+        if (!stopped && !controller.signal.aborted) {
+          setInsights(null);
+          setInsightsReadAt(null);
+        }
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 60_000);
+    const onVisibility = () => void refresh();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stopped = true;
+      request?.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -310,6 +361,25 @@ export function HouseProvider({ children }: { children: React.ReactNode }) {
     flash(`Put back: ${label}`);
   }, [flash, sendPatches, undo]);
 
+  // Suggestions use this same path as the ordinary scene buttons: one undo
+  // snapshot, the server's hardware workarounds, and the partial-apply report.
+  const activateScene = useCallback(
+    (scene: SceneView) => {
+      remember(scene.label);
+      return act(scene.entityId, async () => {
+        const result = await postJson<{ unreachable: string[] }>("/api/scene", {
+          entityId: scene.entityId,
+        });
+        flash(
+          result.unreachable.length
+            ? `${scene.label} — couldn't reach ${result.unreachable.join(", ")}`
+            : scene.label,
+        );
+      });
+    },
+    [act, flash, remember],
+  );
+
   const solo = useCallback(
     (lamp: LampView) => {
       remember(`solo ${lamp.name}`);
@@ -412,6 +482,9 @@ export function HouseProvider({ children }: { children: React.ReactNode }) {
 
   const value: House = {
     state,
+    stateReadAt,
+    insights,
+    insightsReadAt,
     lamps,
     reachable,
     lit,
@@ -427,6 +500,7 @@ export function HouseProvider({ children }: { children: React.ReactNode }) {
     flash,
     act,
     remember,
+    activateScene,
     revert,
     dismissUndo: () => setUndo(null),
     setLamp,

@@ -1,6 +1,7 @@
 "use client";
 
 import { RefreshCw, Undo2, X } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { HouseProvider, summarize, useHouse } from "./house";
 import { InstallHint } from "./install-hint";
 import { TabBar } from "./tab-bar";
@@ -28,24 +29,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 function Shell({ children }: { children: React.ReactNode }) {
   const { state, lamps, notice, undo, revert, dismissUndo, load } = useHouse();
+  const history = usePathname().startsWith("/history");
 
   return (
     <div className="app">
       <header className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-[25px] font-semibold tracking-tight m-0">Home</h1>
+          <h1 className="text-[25px] font-semibold tracking-tight m-0">{history ? "History" : "Home"}</h1>
           <p className="text-[13px] text-[var(--text-muted)] m-0 mt-0.5 truncate">
-            {state === null ? "Connecting…" : state.ok ? summarize(lamps) : "Disconnected"}
+            {history ? "Recorded lights, scenes & temperature" : state === null ? "Connecting…" : state.ok ? summarize(lamps) : "Disconnected"}
           </p>
         </div>
-        <button
+        {!history && <button
           onClick={() => void load()}
           aria-label="Refresh"
           className="text-[var(--text-muted)] active:scale-90 transition-transform shrink-0"
           style={{ minWidth: 44 }}
         >
           <RefreshCw size={17} />
-        </button>
+        </button>}
       </header>
 
       <main>{children}</main>

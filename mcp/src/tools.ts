@@ -26,6 +26,10 @@ import {
   ZigbeeError, type ZigbeeDevice,
 } from "./zigbee.js";
 import { consumeProposal, createProposal, pendingProposals, ProposalError } from "./propose.js";
+import {
+  HistoryInputError, historyInputSchema, parseHistoryOptions,
+  parseRoomInsightOptions, roomInsightInputSchema,
+} from "./history-input.js";
 
 /** A failure the model should read and correct, not an outage. */
 export class ToolError extends Error {}
@@ -104,7 +108,8 @@ function rethrow(e: unknown): never {
   if (e instanceof ToolError) throw e;
   if (
     e instanceof ApiError || e instanceof MqttError || e instanceof HaRegistryError ||
-    e instanceof HaServiceError || e instanceof ZigbeeError || e instanceof ProposalError
+    e instanceof HaServiceError || e instanceof ZigbeeError || e instanceof ProposalError ||
+    e instanceof HistoryInputError
   ) {
     throw new ToolError(e.message);
   }
@@ -343,6 +348,67 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "get_lamp_history",
+    title: "Recorded lamp changes",
+    description:
+      "Read recorded lamp state changes, including changes made by remotes, automations and other apps. " +
+      "Optional entity_id and room filters; defaults to the last seven days. Each page covers at most " +
+      "31 days and 1000 rows. Follow nextCursor with the same start/end and filters to continue.\n\n" +
+      "These are HISTORICAL observations, never evidence of the current lamp state. Use get_room or " +
+      "get_lamp for now. Preserve coverage and collection gaps when reporting: missing observations " +
+      "do not prove a lamp was off. Database failures are unavailable history, never zero usage. " +
+      "get_history remains the separate scene-tap history tool.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    inputSchema: historyInputSchema("light"),
+    handler: async (a) => {
+      try {
+        return { data: await api.lampHistory(parseHistoryOptions(a, "light")) };
+      } catch (e) {
+        rethrow(e);
+      }
+    },
+  },
+  {
+    name: "get_climate_history",
+    title: "Recorded room temperature and humidity",
+    description:
+      "Read recorded temperature and humidity observations, with optional sensor/climate entity_id and room " +
+      "filters. Defaults to the last seven days; at most 31 days and 1000 rows per page. Follow " +
+      "nextCursor with the same start/end and filters to continue.\n\n" +
+      "Retain the units, observation timestamps and coverage returned by the app. Historical samples " +
+      "are not the current room temperature. Missing sensors, collection gaps and an unavailable " +
+      "database mean unknown, never a zero reading or proof that conditions stayed constant.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    inputSchema: historyInputSchema("climate"),
+    handler: async (a) => {
+      try {
+        return { data: await api.climateHistory(parseHistoryOptions(a, "climate")) };
+      } catch (e) {
+        rethrow(e);
+      }
+    },
+  },
+  {
+    name: "get_room_insights",
+    title: "Room lighting and climate observations",
+    description:
+      "Summarize recorded lighting use and climate observations over 1–90 days (default 30), optionally " +
+      "for one room. Relays the app's coverage, gaps and explanations alongside patterns and anomalies.\n\n" +
+      "Patterns summarize observed history; they do not establish occupancy, intent or causation. " +
+      "Report limited coverage and uncertainty. An anomaly is a suggestion to investigate, not a " +
+      "diagnosis. Never present historical readings as current lamp state; use get_room for that. " +
+      "This read changes no lamp, scene, schedule, configuration or historical record.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    inputSchema: roomInsightInputSchema,
+    handler: async (a) => {
+      try {
+        return { data: await api.roomInsights(parseRoomInsightOptions(a)) };
+      } catch (e) {
+        rethrow(e);
+      }
+    },
+  },
+  {
     name: "list_pending_changes",
     title: "Changes waiting for approval",
     description:
@@ -367,8 +433,9 @@ export const TOOLS: ToolDef[] = [
       "  • scene_meta(entity_id PK, label, accent, sort_order, created_at)\n" +
       "  • scene_tap(id, entity_id → scene_meta, tapped_at)\n" +
       "  • scene_alias(entity_id → scene_meta, alias, created_at)\n" +
-      "Nothing about the lamps themselves is in this database — Home Assistant owns that, on a " +
-      "different machine — so no query here can tell you whether a light is on.",
+      "This SQL surface cannot read lamp or climate observations; use get_lamp_history, " +
+      "get_climate_history or get_room_insights for those. Only Home Assistant owns current lamp " +
+      "state, so no query here can tell you whether a light is on now.",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
